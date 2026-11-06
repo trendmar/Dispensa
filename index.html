@@ -183,7 +183,8 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 
 <script>
 /* ================= CONFIG / STATO ================= */
-const LS = {cfg:'disp.cfg', items:'disp.items', pend:'disp.pend', mode:'disp.mode', ticks:'disp.ticks'};
+const VERSION = '1.1';
+const LS = {cfg:'disp.cfg', items:'disp.items', extras:'disp.extras', pend:'disp.pend', mode:'disp.mode'};
 const DEF_POS = ['Dispensa','Frigo','Freezer','Cantina'];
 const DEF_CAT = ['Pasta e riso','Conserve','Sughi e condimenti','Colazione','Snack e dolci','Bevande',
   'Latticini','Carne e pesce','Frutta e verdura','Surgelati','Bimbi','Casa e pulizia','Altro'];
@@ -195,7 +196,7 @@ const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } cat
 let cfg = load(LS.cfg, null);
 let items = load(LS.items, []);
 let pending = load(LS.pend, []);
-let ticks = load(LS.ticks, {});
+let extras = load(LS.extras, []);
 let tab = 'inv', filter = 'all', query = '';
 let syncing = false, syncErr = '';
 
@@ -251,8 +252,8 @@ async function apiPost(ops){
 }
 function queue(op){
   op.user = cfg.user;
-  pending.push(op); save(LS.pend, pending);
-  save(LS.items, items);
+  if (cfg.url) { pending.push(op); save(LS.pend, pending); }
+  save(LS.items, items); save(LS.extras, extras);
   render(); sync();
 }
 async function sync(){
@@ -264,7 +265,7 @@ async function sync(){
     const r = batch.length ? await apiPost(batch) : await apiGet();
     if (!r.ok) throw new Error(r.error);
     pending = pending.slice(batch.length); save(LS.pend, pending);
-    if (!pending.length) { items = r.items; save(LS.items, items); }
+    if (!pending.length) { items = r.items; extras = r.extras || []; save(LS.items, items); save(LS.extras, extras); }
     syncErr = ''; setSync('');
   } catch(e) {
     syncErr = e.message || 'offline'; setSync(`⚠︎ ${pending.length || ''} non sincr.`, true);
@@ -291,6 +292,8 @@ function expTag(it){
 const fmtDate = d => d ? d.split('-').reverse().slice(0,2).join('/') + '/' + d.slice(2,4) : '';
 const isSoon = it => { const d = daysTo(it.scadenza); return d !== null && d <= SOON_DAYS && it.qty > 0; };
 const isLow = it => it.scortaMin > 0 && it.qty < it.scortaMin;
+const inLista = it => isLow(it) || it.stato === 'comprare' || it.stato === 'preso'; // visibile in Spesa
+const inSpesa = it => inLista(it) && it.stato !== 'preso';                          // ancora da comprare
 const byId = id => items.find(i => i.id === id);
 const byCode = c => items.find(i => i.barcode && String(i.barcode) === String(c));
 
@@ -298,13 +301,24 @@ function changeQty(id, delta){
   const it = byId(id); if (!it) return;
   if (it.qty + delta < 0) return;
   it.qty += delta;
+  if (delta > 0) it.stato = '';
   queue({op:'delta', id, delta});
   return it;
 }
-function upsert(it){
+// qtyDelta: la quantità di un prodotto esistente cambia solo per differenza (no sovrascritture tra telefoni)
+function upsert(it, qtyDelta){
   const i = items.findIndex(x => x.id === it.id);
-  if (i >= 0) items[i] = it; else items.push(it);
-  queue({op:'upsert', item: it});
+  if (i >= 0) {
+    it.qty = Math.max(0, items[i].qty + (qtyDelta || 0));
+    it.stato = qtyDelta > 0 ? '' : (items[i].stato || '');
+    items[i] = it;
+    queue({op:'upsert', item: it, qtyDelta: qtyDelta || 0});
+  } else { it.stato = ''; items.push(it); queue({op:'upsert', item: it}); }
+}
+function setStato(id, stato){ const it = byId(id); if (!it) return; it.stato = stato; queue({op:'stato', id, stato}); }
+function toggleSpesa(id){
+  const it = byId(id); if (!it) return;
+  if (inSpesa(it)) setStato(id, isLow(it) ? 'preso' : ''); else setStato(id, 'comprare');
 }
 function remove(id){
   items = items.filter(i => i.id !== id);
@@ -320,7 +334,7 @@ function row(it){
     ${thumb(it)}
     <div class="info" data-open="${it.id}">
       <div class="name">${esc(it.nome)}</div>
-      <div class="meta">${esc(it.posizione || '')}${it.marca ? ' · ' + esc(it.marca) : ''} ${expTag(it)} ${isLow(it) ? '<span class="tag w">da comprare</span>' : ''}</div>
+      <div class="meta">${esc(it.posizione || '')}${it.marca ? ' · ' + esc(it.marca) : ''} ${expTag(it)} ${inSpesa(it) ? '<span class="tag w">da comprare</span>' : ''}</div>
     </div>
     <div class="qty">
       <button class="qb" data-d="-1" data-id="${it.id}">−</button>
@@ -330,7 +344,7 @@ function row(it){
   </div>`;
 }
 function render(){
-  const shopN = items.filter(isLow).length;
+  const shopN = items.filter(inSpesa).length + extras.filter(x => x.stato !== 'preso').length;
   $('#shopN').innerHTML = shopN ? `<span class="badge">${shopN}</span>` : '';
   $('#hdr-inv').classList.toggle('hidden', tab !== 'inv');
   $('#title').textContent = tab === 'inv' ? 'Dispensa' : 'Lista spesa';
@@ -339,7 +353,7 @@ function render(){
 }
 function renderInv(){
   const soonN = items.filter(isSoon).length;
-  const chips = [['all','Tutti', items.filter(i=>i.qty>0).length], ['soon','In scadenza', soonN], ['low','Da comprare', items.filter(isLow).length]]
+  const chips = [['all','Tutti', items.filter(i=>i.qty>0).length], ['soon','In scadenza', soonN], ['low','Da comprare', items.filter(inSpesa).length]]
     .concat(positions().map(p => ['pos:' + p, p, items.filter(i => i.posizione === p && i.qty > 0).length]))
     .concat([['zero','Esauriti', items.filter(i=>i.qty<=0).length]]);
   $('#chips').innerHTML = chips.map(([k,l,n]) => `<button class="chip ${filter===k?'on':''}" data-f="${k}">${esc(l)}<span class="n">${n}</span></button>`).join('');
@@ -347,7 +361,7 @@ function renderInv(){
   const q = query.toLowerCase();
   let list = items.filter(it => !q || [it.nome, it.marca, it.categoria, it.posizione, it.barcode].join(' ').toLowerCase().includes(q));
   if (filter === 'soon') list = list.filter(isSoon).sort((a,b) => a.scadenza.localeCompare(b.scadenza));
-  else if (filter === 'low') list = list.filter(isLow);
+  else if (filter === 'low') list = list.filter(inSpesa);
   else if (filter === 'zero') list = list.filter(i => i.qty <= 0);
   else if (filter.startsWith('pos:')) list = list.filter(i => i.posizione === filter.slice(4));
   if (filter !== 'soon') list.sort((a,b) => (b.qty>0) - (a.qty>0) || (a.categoria||'').localeCompare(b.categoria||'') || a.nome.localeCompare(b.nome));
@@ -366,17 +380,46 @@ function renderInv(){
   $('#main').innerHTML = html;
 }
 function renderShop(){
-  const list = items.filter(isLow).sort((a,b) => (a.categoria||'').localeCompare(b.categoria||'') || a.nome.localeCompare(b.nome));
-  if (!list.length) { $('#main').innerHTML = `<div class="empty">Niente da comprare 👌<br><br><span style="font-size:14px">Un prodotto finisce qui quando la quantità scende sotto la sua <b>scorta minima</b>.</span></div>`; return; }
-  $('#main').innerHTML = list.map(it => `
-    <label class="list-chk ${ticks[it.id] ? 'done' : ''}">
-      <input type="checkbox" data-tick="${it.id}" ${ticks[it.id] ? 'checked' : ''}>
+  const sortF = (a,b) => (a.categoria||'').localeCompare(b.categoria||'') || a.nome.localeCompare(b.nome);
+  const todoP = items.filter(inSpesa).sort(sortF), doneP = items.filter(i => inLista(i) && i.stato === 'preso').sort(sortF);
+  const todoX = extras.filter(x => x.stato !== 'preso'), doneX = extras.filter(x => x.stato === 'preso');
+  const pRow = (it, done) => `
+    <label class="list-chk ${done ? 'done' : ''}">
+      <input type="checkbox" data-tick="${it.id}" ${done ? 'checked' : ''}>
       <div class="info"><div class="name">${esc(it.nome)}</div>
-      <div class="meta">${esc(it.marca||'')} ${it.marca?'·':''} ne hai ${it.qty}, servono ${it.scortaMin - it.qty}</div></div>
-    </label>`).join('') +
-    `<button class="btn" id="share">Condividi lista</button>
-     <button class="btn sec2" id="untick">Togli le spunte</button>
-     <p class="hint" style="text-align:center;margin-top:12px">Quando torni dalla spesa: ▥ in modalità <b>+ Carica</b> e scansiona tutto.</p>`;
+      <div class="meta">${esc(it.marca||'')}${it.marca?' · ':''}${isLow(it) ? `ne hai ${it.qty}, servono ${it.scortaMin - it.qty}` : 'aggiunto a mano'}</div></div>
+    </label>`;
+  const xRow = (x, done) => `
+    <label class="list-chk ${done ? 'done' : ''}">
+      <input type="checkbox" data-xtick="${x.id}" ${done ? 'checked' : ''}>
+      <div class="info"><div class="name">${esc(x.nome)}</div><div class="meta">voce libera${x.utente ? ' · ' + esc(x.utente) : ''}</div></div>
+    </label>`;
+  let html = `<div style="display:flex;gap:8px;margin:4px 0 10px">
+      <input class="in" id="x-new" placeholder="Aggiungi voce libera (es. candele)" autocomplete="off">
+      <button class="btn" id="x-add" style="width:auto;margin:0;padding:0 18px">＋</button></div>`;
+  if (!todoP.length && !todoX.length && !doneP.length && !doneX.length) {
+    html += `<div class="empty">Niente da comprare 👌<br><br><span style="font-size:14px">Un prodotto finisce qui quando scende sotto la <b>scorta minima</b>, quando lo segni "da comprare" o quando lo chiedi ad Alexa.</span></div>`;
+  } else {
+    html += todoP.map(i => pRow(i, false)).join('') + todoX.map(x => xRow(x, false)).join('');
+    if (doneP.length || doneX.length) {
+      html += `<div class="sec">Nel carrello</div>` + doneP.map(i => pRow(i, true)).join('') + doneX.map(x => xRow(x, true)).join('');
+      html += `<p class="hint">I prodotti spuntati escono dalla lista quando li carichi con lo scanner.</p>`;
+    }
+    html += `<button class="btn" id="share">Condividi lista</button>`;
+    if (doneX.length) html += `<button class="btn sec2" id="x-clear">Rimuovi voci libere spuntate</button>`;
+  }
+  html += `<p class="hint" style="text-align:center;margin-top:12px">Al rientro dalla spesa: ▥ in modalità <b>+ Carica</b> e scansiona tutto.</p>`;
+  const old = $('#x-new'), keep = old ? old.value : '', foc = old && document.activeElement === old;
+  $('#main').innerHTML = html;
+  if (keep) $('#x-new').value = keep;
+  if (foc) $('#x-new').focus();
+}
+function addExtra(){
+  const inp = $('#x-new'); const nome = inp && inp.value.trim(); if (!nome) return;
+  inp.value = '';
+  const x = {id: 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2,5), nome, stato:'', utente: cfg.user};
+  extras.push(x); queue({op:'extraAdd', id: x.id, nome});
+  setTimeout(() => $('#x-new') && $('#x-new').focus(), 50);
 }
 
 /* ================= SHEETS (bottom) ================= */
@@ -407,10 +450,14 @@ function openDetail(id){
       ${it.note ? `<div class="fact" style="grid-column:1/-1"><span>Note</span>${esc(it.note)}</div>` : ''}
       ${it.updatedBy ? `<div class="hint" style="grid-column:1/-1">Ultima modifica: ${esc(it.updatedBy)} ${it.updated ? '· ' + new Date(it.updated).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}</div>` : ''}
     </div>
+    <button class="btn sec2" id="d-shop"></button>
     <button class="btn sec2" id="d-edit">Modifica</button>
     <button class="btn" id="d-ok">Fatto</button>`,
   ov => {
-    const upd = () => ov.querySelector('#d-q').textContent = byId(id).qty;
+    const shopBtn = () => ov.querySelector('#d-shop').textContent = inSpesa(byId(id)) ? '✓ In lista spesa — togli' : '🛒 Metti in lista spesa';
+    const upd = () => { ov.querySelector('#d-q').textContent = byId(id).qty; shopBtn(); };
+    shopBtn();
+    ov.querySelector('#d-shop').onclick = () => { toggleSpesa(id); shopBtn(); };
     ov.querySelector('#d-m').onclick = () => { changeQty(id, -1); upd(); };
     ov.querySelector('#d-p').onclick = () => { changeQty(id, 1); upd(); };
     ov.querySelector('#d-edit').onclick = () => openForm(byId(id));
@@ -420,6 +467,7 @@ function openDetail(id){
 
 function openForm(it, prefill){
   const isNew = !it;
+  const origQty = it ? it.qty : 0;
   it = it ? {...it} : {id: uid(), nome:'', marca:'', formato:'', categoria:'Altro', posizione: positions()[0], qty:1, scortaMin:1, scadenza:'', note:'', img:'', barcode:'', ...prefill};
   const cats = DEF_CAT.includes(it.categoria) || !it.categoria ? DEF_CAT : [it.categoria, ...DEF_CAT];
   const poss = positions().includes(it.posizione) || !it.posizione ? positions() : [...positions(), it.posizione];
@@ -474,8 +522,8 @@ function openForm(it, prefill){
         marca: ov.querySelector('#f-marca').value.trim(),
         formato: ov.querySelector('#f-form').value.trim(),
         barcode: bc, note: ov.querySelector('#f-note').value.trim()};
-      delete out.offMsg; delete out.updated; delete out.updatedBy;
-      upsert(out); closeSheet(); toast(isNew ? `Aggiunto: ${nome}` : 'Salvato');
+      delete out.offMsg; delete out.updated; delete out.updatedBy; delete out.stato;
+      upsert(out, isNew ? 0 : out.qty - origQty); closeSheet(); toast(isNew ? `Aggiunto: ${nome}` : 'Salvato');
     };
     const del = ov.querySelector('#f-del');
     if (del) del.onclick = () => { if (confirm(`Eliminare "${it.nome}"?`)) { remove(it.id); closeSheet(); toast('Eliminato'); } };
@@ -500,7 +548,7 @@ function openSettings(){
     ${shareLink ? `<button class="btn sec2" id="s-share">Invia link di configurazione</button><p class="hint">Mandalo ad Alba: aprendolo, URL e token si compilano da soli.</p>` : ''}
     <button class="btn sec2" id="s-csv">Esporta CSV</button>
     <button class="btn sec2" id="s-sync">Sincronizza ora</button>
-    <p class="hint">Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>`,
+    <p class="hint">v${VERSION} · Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>`,
   ov => {
     ov.querySelector('#s-save').onclick = () => {
       cfg.user = ov.querySelector('#s-user').value.trim() || cfg.user;
@@ -572,7 +620,7 @@ async function onCode(code){
     const d = scanMode === 'in' ? 1 : -1;
     if (d < 0 && it.qty <= 0) { beep(false); scanMsg(`⚠︎ ${it.nome}: già a 0`); return; }
     changeQty(it.id, d); beep();
-    scanMsg(`${d > 0 ? '＋' : '−'} ${it.nome} → ${it.qty}${isLow(it) ? '  · in lista spesa' : ''}`);
+    scanMsg(`${d > 0 ? '＋' : '−'} ${it.nome} → ${it.qty}${inSpesa(it) ? '  · in lista spesa' : ''}`);
     return;
   }
 
@@ -654,21 +702,28 @@ function start(){
 document.addEventListener('click', e => {
   const t = e.target;
   const qb = t.closest('.row .qb');
-  if (qb) { const it = changeQty(qb.dataset.id, +qb.dataset.d); if (it && isLow(it) && +qb.dataset.d < 0) toast(`${it.nome} → lista spesa`); return; }
+  if (qb) { const it = changeQty(qb.dataset.id, +qb.dataset.d); if (it && inSpesa(it) && +qb.dataset.d < 0 && it.qty === it.scortaMin - 1) toast(`${it.nome} → lista spesa`); return; }
   const op = t.closest('[data-open]'); if (op) return openDetail(op.dataset.open);
   const th = t.closest('.row .thumb'); if (th) return openDetail(th.parentElement.dataset.id);
   const ch = t.closest('#chips .chip'); if (ch) { filter = ch.dataset.f; render(); window.scrollTo(0,0); return; }
   const tb = t.closest('.tab'); if (tb) { tab = tb.dataset.tab; render(); window.scrollTo(0,0); return; }
   if (t.closest('#share')) {
-    const list = items.filter(isLow).filter(i => !ticks[i.id]);
-    return shareText('Lista spesa', '🛒 Lista spesa\n' + list.map(i => `• ${i.nome}${i.marca ? ' (' + i.marca + ')' : ''} ×${i.scortaMin - i.qty}`).join('\n'));
+    const righe = items.filter(inSpesa).map(i => `• ${i.nome}${i.marca ? ' (' + i.marca + ')' : ''}${isLow(i) ? ' ×' + (i.scortaMin - i.qty) : ''}`)
+      .concat(extras.filter(x => x.stato !== 'preso').map(x => `• ${x.nome}`));
+    return shareText('Lista spesa', '🛒 Lista spesa\n' + righe.join('\n'));
   }
-  if (t.closest('#untick')) { ticks = {}; save(LS.ticks, ticks); render(); }
+  if (t.closest('#x-add')) return addExtra();
+  if (t.closest('#x-clear')) {
+    const ids = extras.filter(x => x.stato === 'preso').map(x => x.id);
+    extras = extras.filter(x => x.stato !== 'preso'); queue({op:'extraDel', id: ids}); return;
+  }
 });
 document.addEventListener('change', e => {
-  const tk = e.target.dataset?.tick;
-  if (tk) { if (e.target.checked) ticks[tk] = 1; else delete ticks[tk]; save(LS.ticks, ticks); render(); }
+  const tk = e.target.dataset?.tick, xt = e.target.dataset?.xtick;
+  if (tk) { const it = byId(tk); setStato(tk, e.target.checked ? 'preso' : (isLow(it) ? '' : 'comprare')); }
+  if (xt) { const x = extras.find(x => x.id === xt); if (x) { x.stato = e.target.checked ? 'preso' : ''; queue({op:'extraSet', id: xt, stato: x.stato}); } }
 });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'x-new') addExtra(); });
 $('#q').addEventListener('input', e => { query = e.target.value.trim(); renderInv(); });
 $('#b-scan').onclick = openScanner;
 $('#b-add').onclick = () => openForm(null);
