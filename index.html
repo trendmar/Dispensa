@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#1f6f4a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Dispensa">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<title>Dispensa</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{
+  --bg:#f6f5f1; --card:#fff; --ink:#1b1d1c; --mut:#6b706d; --line:#e4e2dc;
+  --acc:#1f6f4a; --acc2:#e7f2ec; --warn:#b4540a; --warn2:#fdf0e3; --bad:#b3261e; --bad2:#fbe9e7;
+  --r:14px; --safe-b:env(safe-area-inset-bottom,0px); --safe-t:env(safe-area-inset-top,0px);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#121413; --card:#1c1f1d; --ink:#ecefed; --mut:#9aa19d; --line:#2c302e;
+  --acc:#4cc18a; --acc2:#1d3328; --warn:#f0a35c; --warn2:#3a2a1a; --bad:#f2827a; --bad2:#3a1f1d;
+}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+.hidden{display:none!important}
+
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(var(--safe-t) + 10px) 14px 8px}
+.top{display:flex;align-items:center;gap:10px}
+.top h1{font-size:22px;margin:0;flex:1;letter-spacing:-.3px}
+.sync{font-size:12px;color:var(--mut)}
+.sync.err{color:var(--bad)}
+.ibtn{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:20px}
+.ibtn:active{background:var(--line)}
+.search{margin-top:8px;width:100%;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);outline:none}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:7px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:14px;white-space:nowrap}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chip .n{opacity:.6;margin-left:4px}
+
+main{padding:4px 12px calc(110px + var(--safe-b))}
+.row{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:8px 8px 8px 10px;margin-bottom:6px}
+.row.zero{opacity:.55}
+.thumb{width:42px;height:42px;border-radius:10px;flex:none;background:var(--acc2);color:var(--acc);display:grid;place-items:center;font-weight:700;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.info{flex:1;min-width:0}
+.name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{font-size:13px;color:var(--mut);display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.tag{font-size:12px;padding:1px 7px;border-radius:6px;background:var(--line);color:var(--ink)}
+.tag.w{background:var(--warn2);color:var(--warn)}
+.tag.b{background:var(--bad2);color:var(--bad)}
+.tag.g{background:var(--acc2);color:var(--acc)}
+.qty{display:flex;align-items:center;gap:2px;flex:none}
+.qb{width:38px;height:38px;border-radius:10px;background:var(--bg);font-size:22px;font-weight:600;line-height:1}
+.qb:active{background:var(--line)}
+.qv{min-width:30px;text-align:center;font-weight:700;font-size:17px}
+.empty{text-align:center;color:var(--mut);padding:40px 20px}
+.sec{font-size:13px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:14px 4px 6px}
+
+nav{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--card);border-top:1px solid var(--line);display:flex;justify-content:space-around;align-items:center;padding:6px 10px calc(6px + var(--safe-b))}
+.tab{flex:1;padding:6px;font-size:12px;color:var(--mut);display:flex;flex-direction:column;align-items:center;gap:2px}
+.tab b{font-size:20px;font-weight:400}
+.tab.on{color:var(--acc);font-weight:600}
+.fab{width:64px;height:64px;border-radius:20px;background:var(--acc);color:#fff;font-size:28px;margin-top:-30px;box-shadow:0 6px 18px rgba(0,0,0,.2);flex:none}
+.badge{background:var(--bad);color:#fff;border-radius:99px;font-size:11px;padding:0 6px;margin-left:2px}
+
+/* sheets */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20;display:flex;align-items:flex-end}
+.sheet{width:100%;max-height:92vh;overflow:auto;background:var(--bg);border-radius:20px 20px 0 0;padding:14px 16px calc(18px + var(--safe-b))}
+.grab{width:40px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 10px}
+.sh-h{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.sh-h h2{margin:0;font-size:19px;flex:1}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 2px 4px}
+.in{width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card);outline:none}
+.in:focus{border-color:var(--acc)}
+.in.miss{border-color:var(--warn);background:var(--warn2)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hint{font-size:12px;color:var(--mut);margin:4px 2px 0}
+.step{display:flex;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.step button{width:44px;height:44px;font-size:22px}
+.step input{flex:1;width:100%;text-align:center;border:0;background:none;font-weight:700;font-size:17px;outline:none}
+.btn{width:100%;padding:14px;border-radius:14px;background:var(--acc);color:#fff;font-weight:600;font-size:16px;margin-top:14px}
+.btn.sec2{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.btn.del{background:none;color:var(--bad);margin-top:6px}
+details{margin-top:12px}
+summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
+
+.det-top{display:flex;gap:12px;align-items:center}
+.det-top .thumb{width:72px;height:72px;font-size:26px;border-radius:14px}
+.big{display:flex;align-items:center;justify-content:center;gap:18px;margin:18px 0 6px}
+.big .qb{width:64px;height:64px;font-size:30px;border-radius:18px;background:var(--card);border:1px solid var(--line)}
+.big .qv{font-size:40px;min-width:70px}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-size:14px}
+.fact span{display:block;font-size:12px;color:var(--mut)}
+
+/* scanner */
+#scan{position:fixed;inset:0;z-index:30;background:#000;color:#fff;display:flex;flex-direction:column}
+#scan .bar{padding:calc(var(--safe-t) + 10px) 12px 10px;display:flex;align-items:center;gap:8px}
+.seg{flex:1;display:flex;background:#222;border-radius:12px;padding:3px}
+.seg button{flex:1;padding:9px 4px;border-radius:9px;color:#bbb;font-size:14px;font-weight:600}
+.seg button.on{background:#fff;color:#000}
+.seg button.on.out{background:#f2827a}
+.seg button.on.inn{background:#4cc18a}
+#reader{flex:1;width:100%;overflow:hidden}
+#reader video{object-fit:cover}
+#scan .foot{padding:10px 12px calc(14px + var(--safe-b));display:flex;gap:8px}
+#scan .foot input{flex:1;padding:12px;border-radius:12px;border:0;background:#222;color:#fff;outline:none}
+#scan .foot button{padding:0 16px;border-radius:12px;background:#333;color:#fff}
+#scan .msg{text-align:center;font-size:14px;color:#ccc;padding:6px 12px;min-height:28px}
+
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + var(--safe-b));z-index:50;background:var(--ink);color:var(--bg);padding:11px 16px;border-radius:12px;font-size:15px;max-width:90vw;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+.list-chk{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:6px}
+.list-chk input{width:22px;height:22px;accent-color:var(--acc)}
+.list-chk.done .name{text-decoration:line-through;opacity:.5}
+</style>
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup" class="hidden" style="padding:calc(var(--safe-t) + 30px) 20px 20px;max-width:520px;margin:auto">
+  <h1 style="margin:0 0 6px">🥫 Dispensa</h1>
+  <p style="color:var(--mut);margin-top:0">Prima configurazione (una volta per telefono).</p>
+  <label>Il tuo nome</label>
+  <input class="in" id="su-user" placeholder="Mario">
+  <label>Link di configurazione <i>oppure</i> URL Apps Script</label>
+  <textarea class="in" id="su-url" rows="3" placeholder="https://script.google.com/macros/s/…/exec"></textarea>
+  <label>Token</label>
+  <input class="in" id="su-token" placeholder="token segreto">
+  <p class="hint">Se incolli il link di configurazione completo, URL e token si compilano da soli.</p>
+  <button class="btn" id="su-go">Collega</button>
+  <button class="btn sec2" id="su-local">Prova senza cloud (solo questo telefono)</button>
+</div>
+
+<!-- APP -->
+<div id="app" class="hidden">
+  <header>
+    <div class="top">
+      <h1 id="title">Dispensa</h1>
+      <span class="sync" id="sync"></span>
+      <button class="ibtn" id="b-add" title="Aggiungi a mano">＋</button>
+      <button class="ibtn" id="b-set" title="Impostazioni">⚙︎</button>
+    </div>
+    <div id="hdr-inv">
+      <input class="search" id="q" type="search" placeholder="Cerca prodotto, marca, categoria…" autocomplete="off">
+      <div class="chips" id="chips"></div>
+    </div>
+  </header>
+  <main id="main"></main>
+  <nav>
+    <button class="tab on" data-tab="inv"><b>☰</b>Dispensa</button>
+    <button class="fab" id="b-scan" aria-label="Scansiona">▥</button>
+    <button class="tab" data-tab="shop"><b>🛒</b><span>Spesa<span id="shopN"></span></span></button>
+  </nav>
+</div>
+
+<!-- SCANNER -->
+<div id="scan" class="hidden">
+  <div class="bar">
+    <div class="seg" id="mode">
+      <button data-m="out">− Usa</button>
+      <button data-m="ask">Chiedi</button>
+      <button data-m="in">+ Carica</button>
+    </div>
+    <button class="ibtn" id="scan-x" style="color:#fff">✕</button>
+  </div>
+  <div id="reader"></div>
+  <div class="msg" id="scan-msg">Inquadra il codice a barre</div>
+  <div class="foot">
+    <input id="scan-man" inputmode="numeric" placeholder="…o digita il codice">
+    <button id="scan-go">OK</button>
+  </div>
+</div>
+
+<div id="sheet-root"></div>
+<div id="toast"></div>
+
+<script>
+/* ================= CONFIG / STATO ================= */
+const LS = {cfg:'disp.cfg', items:'disp.items', pend:'disp.pend', mode:'disp.mode', ticks:'disp.ticks'};
+const DEF_POS = ['Dispensa','Frigo','Freezer','Cantina'];
+const DEF_CAT = ['Pasta e riso','Conserve','Sughi e condimenti','Colazione','Snack e dolci','Bevande',
+  'Latticini','Carne e pesce','Frutta e verdura','Surgelati','Bimbi','Casa e pulizia','Altro'];
+const SOON_DAYS = 7;
+
+const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch(e){ return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} };
+
+let cfg = load(LS.cfg, null);
+let items = load(LS.items, []);
+let pending = load(LS.pend, []);
+let ticks = load(LS.ticks, {});
+let tab = 'inv', filter = 'all', query = '';
+let syncing = false, syncErr = '';
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const positions = () => cfg?.pos?.length ? cfg.pos : DEF_POS;
+
+/* ================= SETUP ================= */
+function parseSetupLink(txt){
+  // accetta: link app con #u=...&t=...  oppure URL /exec puro
+  try {
+    const h = txt.includes('#') ? txt.split('#')[1] : '';
+    if (h) { const p = new URLSearchParams(h); if (p.get('u')) return {url:p.get('u'), token:p.get('t')||''}; }
+  } catch(e){}
+  return {url: txt.trim(), token: null};
+}
+function initSetup(){
+  // link di configurazione aperto direttamente
+  if (location.hash.includes('u=')) {
+    const p = parseSetupLink(location.href);
+    $('#su-url').value = p.url; $('#su-token').value = p.token || '';
+    history.replaceState(null, '', location.pathname);
+  }
+  $('#su-url').addEventListener('input', e => {
+    const p = parseSetupLink(e.target.value);
+    if (p.token !== null) { $('#su-url').value = p.url; $('#su-token').value = p.token; }
+  });
+  $('#su-go').onclick = async () => {
+    const c = {user: $('#su-user').value.trim() || 'Io', url: $('#su-url').value.trim(), token: $('#su-token').value.trim(), pos: DEF_POS};
+    if (!/^https:\/\/script\.google\.com\/.+\/exec/.test(c.url)) return toast('URL Apps Script non valido (deve finire con /exec)');
+    $('#su-go').textContent = 'Collegamento…';
+    try {
+      const r = await apiGet(c);
+      if (!r.ok) throw new Error(r.error === 'token' ? 'Token errato' : r.error);
+      cfg = c; save(LS.cfg, cfg); items = r.items; save(LS.items, items);
+      start();
+    } catch(e) { toast('Errore: ' + e.message); $('#su-go').textContent = 'Collega'; }
+  };
+  $('#su-local').onclick = () => { cfg = {user: $('#su-user').value.trim() || 'Io', url:'', token:'', pos: DEF_POS}; save(LS.cfg, cfg); start(); };
+  $('#setup').classList.remove('hidden');
+}
+
+/* ================= BACKEND ================= */
+async function apiGet(c = cfg){
+  const r = await fetch(c.url + '?token=' + encodeURIComponent(c.token) + '&_=' + Date.now());
+  return r.json();
+}
+async function apiPost(ops){
+  // text/plain evita il preflight CORS con Apps Script
+  const r = await fetch(cfg.url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({token: cfg.token, ops})});
+  return r.json();
+}
+function queue(op){
+  op.user = cfg.user;
+  pending.push(op); save(LS.pend, pending);
+  save(LS.items, items);
+  render(); sync();
+}
+async function sync(){
+  if (!cfg.url) { setSync(''); return; }
+  if (syncing) { sync.again = true; return; }
+  syncing = true; setSync('⟳');
+  try {
+    const batch = pending.slice();
+    const r = batch.length ? await apiPost(batch) : await apiGet();
+    if (!r.ok) throw new Error(r.error);
+    pending = pending.slice(batch.length); save(LS.pend, pending);
+    if (!pending.length) { items = r.items; save(LS.items, items); }
+    syncErr = ''; setSync('');
+  } catch(e) {
+    syncErr = e.message || 'offline'; setSync(`⚠︎ ${pending.length || ''} non sincr.`, true);
+  }
+  syncing = false;
+  render();
+  if (sync.again) { sync.again = false; sync(); }
+}
+function setSync(t, err){ const s = $('#sync'); s.textContent = t; s.classList.toggle('err', !!err); }
+
+/* ================= LOGICA ================= */
+function daysTo(d){
+  if (!d) return null;
+  const t = new Date(d + 'T00:00:00'); const n = new Date(); n.setHours(0,0,0,0);
+  return Math.round((t - n) / 864e5);
+}
+function expTag(it){
+  const d = daysTo(it.scadenza); if (d === null || it.qty <= 0) return '';
+  if (d < 0) return `<span class="tag b">scaduto</span>`;
+  if (d === 0) return `<span class="tag b">scade oggi</span>`;
+  if (d <= SOON_DAYS) return `<span class="tag w">scade tra ${d} gg</span>`;
+  return `<span class="tag">${fmtDate(it.scadenza)}</span>`;
+}
+const fmtDate = d => d ? d.split('-').reverse().slice(0,2).join('/') + '/' + d.slice(2,4) : '';
+const isSoon = it => { const d = daysTo(it.scadenza); return d !== null && d <= SOON_DAYS && it.qty > 0; };
+const isLow = it => it.scortaMin > 0 && it.qty < it.scortaMin;
+const byId = id => items.find(i => i.id === id);
+const byCode = c => items.find(i => i.barcode && String(i.barcode) === String(c));
+
+function changeQty(id, delta){
+  const it = byId(id); if (!it) return;
+  if (it.qty + delta < 0) return;
+  it.qty += delta;
+  queue({op:'delta', id, delta});
+  return it;
+}
+function upsert(it){
+  const i = items.findIndex(x => x.id === it.id);
+  if (i >= 0) items[i] = it; else items.push(it);
+  queue({op:'upsert', item: it});
+}
+function remove(id){
+  items = items.filter(i => i.id !== id);
+  queue({op:'delete', id});
+}
+
+/* ================= RENDER ================= */
+function thumb(it){
+  return `<div class="thumb">${it.img ? `<img src="${esc(it.img)}" loading="lazy" alt="">` : esc((it.nome||'?')[0].toUpperCase())}</div>`;
+}
+function row(it){
+  return `<div class="row ${it.qty <= 0 ? 'zero' : ''}" data-id="${it.id}">
+    ${thumb(it)}
+    <div class="info" data-open="${it.id}">
+      <div class="name">${esc(it.nome)}</div>
+      <div class="meta">${esc(it.posizione || '')}${it.marca ? ' · ' + esc(it.marca) : ''} ${expTag(it)} ${isLow(it) ? '<span class="tag w">da comprare</span>' : ''}</div>
+    </div>
+    <div class="qty">
+      <button class="qb" data-d="-1" data-id="${it.id}">−</button>
+      <span class="qv">${it.qty}</span>
+      <button class="qb" data-d="1" data-id="${it.id}">+</button>
+    </div>
+  </div>`;
+}
+function render(){
+  const shopN = items.filter(isLow).length;
+  $('#shopN').innerHTML = shopN ? `<span class="badge">${shopN}</span>` : '';
+  $('#hdr-inv').classList.toggle('hidden', tab !== 'inv');
+  $('#title').textContent = tab === 'inv' ? 'Dispensa' : 'Lista spesa';
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'inv') renderInv(); else renderShop();
+}
+function renderInv(){
+  const soonN = items.filter(isSoon).length;
+  const chips = [['all','Tutti', items.filter(i=>i.qty>0).length], ['soon','In scadenza', soonN], ['low','Da comprare', items.filter(isLow).length]]
+    .concat(positions().map(p => ['pos:' + p, p, items.filter(i => i.posizione === p && i.qty > 0).length]))
+    .concat([['zero','Esauriti', items.filter(i=>i.qty<=0).length]]);
+  $('#chips').innerHTML = chips.map(([k,l,n]) => `<button class="chip ${filter===k?'on':''}" data-f="${k}">${esc(l)}<span class="n">${n}</span></button>`).join('');
+
+  const q = query.toLowerCase();
+  let list = items.filter(it => !q || [it.nome, it.marca, it.categoria, it.posizione, it.barcode].join(' ').toLowerCase().includes(q));
+  if (filter === 'soon') list = list.filter(isSoon).sort((a,b) => a.scadenza.localeCompare(b.scadenza));
+  else if (filter === 'low') list = list.filter(isLow);
+  else if (filter === 'zero') list = list.filter(i => i.qty <= 0);
+  else if (filter.startsWith('pos:')) list = list.filter(i => i.posizione === filter.slice(4));
+  if (filter !== 'soon') list.sort((a,b) => (b.qty>0) - (a.qty>0) || (a.categoria||'').localeCompare(b.categoria||'') || a.nome.localeCompare(b.nome));
+
+  if (!items.length) { $('#main').innerHTML = `<div class="empty">Dispensa vuota.<br><br>Tocca <b>▥</b> per scansionare il primo prodotto<br>o <b>＋</b> per aggiungerlo a mano.</div>`; return; }
+  if (!list.length) { $('#main').innerHTML = `<div class="empty">Nessun prodotto.</div>`; return; }
+
+  // raggruppa per categoria (tranne "in scadenza")
+  if (filter === 'soon' || q) { $('#main').innerHTML = list.map(row).join(''); return; }
+  let html = '', last = null;
+  for (const it of list) {
+    const g = it.qty > 0 ? (it.categoria || 'Altro') : 'Esauriti';
+    if (g !== last) { html += `<div class="sec">${esc(g)}</div>`; last = g; }
+    html += row(it);
+  }
+  $('#main').innerHTML = html;
+}
+function renderShop(){
+  const list = items.filter(isLow).sort((a,b) => (a.categoria||'').localeCompare(b.categoria||'') || a.nome.localeCompare(b.nome));
+  if (!list.length) { $('#main').innerHTML = `<div class="empty">Niente da comprare 👌<br><br><span style="font-size:14px">Un prodotto finisce qui quando la quantità scende sotto la sua <b>scorta minima</b>.</span></div>`; return; }
+  $('#main').innerHTML = list.map(it => `
+    <label class="list-chk ${ticks[it.id] ? 'done' : ''}">
+      <input type="checkbox" data-tick="${it.id}" ${ticks[it.id] ? 'checked' : ''}>
+      <div class="info"><div class="name">${esc(it.nome)}</div>
+      <div class="meta">${esc(it.marca||'')} ${it.marca?'·':''} ne hai ${it.qty}, servono ${it.scortaMin - it.qty}</div></div>
+    </label>`).join('') +
+    `<button class="btn" id="share">Condividi lista</button>
+     <button class="btn sec2" id="untick">Togli le spunte</button>
+     <p class="hint" style="text-align:center;margin-top:12px">Quando torni dalla spesa: ▥ in modalità <b>+ Carica</b> e scansiona tutto.</p>`;
+}
+
+/* ================= SHEETS (bottom) ================= */
+function openSheet(html, onMount){
+  const root = $('#sheet-root');
+  root.innerHTML = `<div class="ov"><div class="sheet"><div class="grab"></div>${html}</div></div>`;
+  const ov = root.firstChild;
+  ov.addEventListener('click', e => { if (e.target === ov) closeSheet(); });
+  onMount && onMount(ov);
+}
+function closeSheet(){ $('#sheet-root').innerHTML = ''; if (closeSheet.after) { const f = closeSheet.after; closeSheet.after = null; f(); } }
+
+function openDetail(id){
+  const it = byId(id); if (!it) return;
+  openSheet(`
+    <div class="det-top">${thumb(it)}
+      <div style="flex:1;min-width:0"><h2 style="margin:0;font-size:20px">${esc(it.nome)}</h2>
+      <div class="meta">${esc([it.marca, it.formato].filter(Boolean).join(' · '))}</div></div>
+    </div>
+    <div class="big">
+      <button class="qb" id="d-m">−</button><span class="qv" id="d-q">${it.qty}</span><button class="qb" id="d-p">+</button>
+    </div>
+    <div class="facts">
+      <div class="fact"><span>Posizione</span>${esc(it.posizione||'—')}</div>
+      <div class="fact"><span>Scadenza</span>${it.scadenza ? fmtDate(it.scadenza) : '—'} ${expTag(it)}</div>
+      <div class="fact"><span>Scorta minima</span>${it.scortaMin || '—'}</div>
+      <div class="fact"><span>Categoria</span>${esc(it.categoria||'—')}</div>
+      ${it.note ? `<div class="fact" style="grid-column:1/-1"><span>Note</span>${esc(it.note)}</div>` : ''}
+      ${it.updatedBy ? `<div class="hint" style="grid-column:1/-1">Ultima modifica: ${esc(it.updatedBy)} ${it.updated ? '· ' + new Date(it.updated).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}</div>` : ''}
+    </div>
+    <button class="btn sec2" id="d-edit">Modifica</button>
+    <button class="btn" id="d-ok">Fatto</button>`,
+  ov => {
+    const upd = () => ov.querySelector('#d-q').textContent = byId(id).qty;
+    ov.querySelector('#d-m').onclick = () => { changeQty(id, -1); upd(); };
+    ov.querySelector('#d-p').onclick = () => { changeQty(id, 1); upd(); };
+    ov.querySelector('#d-edit').onclick = () => openForm(byId(id));
+    ov.querySelector('#d-ok').onclick = closeSheet;
+  });
+}
+
+function openForm(it, prefill){
+  const isNew = !it;
+  it = it ? {...it} : {id: uid(), nome:'', marca:'', formato:'', categoria:'Altro', posizione: positions()[0], qty:1, scortaMin:1, scadenza:'', note:'', img:'', barcode:'', ...prefill};
+  const cats = DEF_CAT.includes(it.categoria) || !it.categoria ? DEF_CAT : [it.categoria, ...DEF_CAT];
+  const poss = positions().includes(it.posizione) || !it.posizione ? positions() : [...positions(), it.posizione];
+  openSheet(`
+    <div class="sh-h">${it.img ? thumb(it) : ''}<h2>${isNew ? 'Nuovo prodotto' : 'Modifica'}</h2></div>
+    ${prefill?.offMsg ? `<p class="hint" style="margin-top:-4px">${esc(prefill.offMsg)}</p>` : ''}
+    <label>Nome *</label>
+    <input class="in" id="f-nome" value="${esc(it.nome)}" placeholder="es. Spaghetti n.5" autocomplete="off">
+    <div class="two">
+      <div><label>Quantità</label>
+        <div class="step"><button type="button" data-s="f-qty" data-d="-1">−</button><input id="f-qty" type="number" inputmode="numeric" min="0" value="${it.qty}"><button type="button" data-s="f-qty" data-d="1">+</button></div></div>
+      <div><label>Scorta minima</label>
+        <div class="step"><button type="button" data-s="f-min" data-d="-1">−</button><input id="f-min" type="number" inputmode="numeric" min="0" value="${it.scortaMin}"><button type="button" data-s="f-min" data-d="1">+</button></div></div>
+    </div>
+    <p class="hint">Sotto la scorta minima il prodotto va nella lista spesa (0 = mai).</p>
+    <label>Posizione</label>
+    <div class="chips" id="f-pos" style="padding-top:0">${poss.map(p => `<button type="button" class="chip ${p===it.posizione?'on':''}" data-p="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+    <div class="two">
+      <div><label>Scadenza</label><input class="in" id="f-scad" type="date" value="${esc(it.scadenza)}"></div>
+      <div><label>Categoria</label><select class="in" id="f-cat">${cats.map(c => `<option ${c===it.categoria?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+    </div>
+    <details ${it.marca || it.note ? 'open' : ''}><summary>Altri dettagli</summary>
+      <div class="two">
+        <div><label>Marca</label><input class="in" id="f-marca" value="${esc(it.marca)}"></div>
+        <div><label>Formato</label><input class="in" id="f-form" value="${esc(it.formato)}" placeholder="500 g"></div>
+      </div>
+      <label>Codice a barre</label><input class="in" id="f-bc" inputmode="numeric" value="${esc(it.barcode)}">
+      <label>Note</label><input class="in" id="f-note" value="${esc(it.note)}" placeholder="es. aperto, per la torta…">
+    </details>
+    <button class="btn" id="f-save">Salva</button>
+    ${isNew ? '' : '<button class="btn del" id="f-del">Elimina prodotto</button>'}`,
+  ov => {
+    let pos = it.posizione;
+    ov.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
+      const inp = ov.querySelector('#' + b.dataset.s); inp.value = Math.max(0, (parseInt(inp.value)||0) + +b.dataset.d);
+    });
+    ov.querySelector('#f-pos').onclick = e => {
+      const b = e.target.closest('[data-p]'); if (!b) return;
+      pos = b.dataset.p; ov.querySelectorAll('#f-pos .chip').forEach(c => c.classList.toggle('on', c === b));
+    };
+    ov.querySelector('#f-save').onclick = () => {
+      const nome = ov.querySelector('#f-nome').value.trim();
+      if (!nome) { ov.querySelector('#f-nome').focus(); return toast('Serve almeno il nome'); }
+      const bc = ov.querySelector('#f-bc').value.trim();
+      const dup = bc && items.find(x => x.barcode === bc && x.id !== it.id);
+      if (dup) return toast(`Codice già usato da "${dup.nome}"`);
+      const out = {...it, nome, posizione: pos,
+        qty: Math.max(0, parseInt(ov.querySelector('#f-qty').value) || 0),
+        scortaMin: Math.max(0, parseInt(ov.querySelector('#f-min').value) || 0),
+        scadenza: ov.querySelector('#f-scad').value || '',
+        categoria: ov.querySelector('#f-cat').value,
+        marca: ov.querySelector('#f-marca').value.trim(),
+        formato: ov.querySelector('#f-form').value.trim(),
+        barcode: bc, note: ov.querySelector('#f-note').value.trim()};
+      delete out.offMsg; delete out.updated; delete out.updatedBy;
+      upsert(out); closeSheet(); toast(isNew ? `Aggiunto: ${nome}` : 'Salvato');
+    };
+    const del = ov.querySelector('#f-del');
+    if (del) del.onclick = () => { if (confirm(`Eliminare "${it.nome}"?`)) { remove(it.id); closeSheet(); toast('Eliminato'); } };
+    // evidenzia i campi mancanti e porta il cursore sul primo
+    if (isNew) {
+      const miss = [['#f-nome', !it.nome], ['#f-scad', !it.scadenza]].filter(x => x[1]).map(x => ov.querySelector(x[0]));
+      miss.forEach(el => { el.classList.add('miss'); el.addEventListener('input', () => el.classList.remove('miss'), {once:true}); });
+      if (!it.nome) setTimeout(() => ov.querySelector('#f-nome').focus(), 250);
+    }
+  });
+}
+
+function openSettings(){
+  const shareLink = cfg.url ? location.origin + location.pathname + '#u=' + encodeURIComponent(cfg.url) + '&t=' + encodeURIComponent(cfg.token) : '';
+  openSheet(`
+    <div class="sh-h"><h2>Impostazioni</h2></div>
+    <label>Il tuo nome</label><input class="in" id="s-user" value="${esc(cfg.user)}">
+    <label>Posizioni (separate da virgola)</label><input class="in" id="s-pos" value="${esc(positions().join(', '))}">
+    <label>URL Apps Script</label><input class="in" id="s-url" value="${esc(cfg.url)}" placeholder="vuoto = solo locale">
+    <label>Token</label><input class="in" id="s-tok" value="${esc(cfg.token)}">
+    <button class="btn" id="s-save">Salva</button>
+    ${shareLink ? `<button class="btn sec2" id="s-share">Invia link di configurazione</button><p class="hint">Mandalo ad Alba: aprendolo, URL e token si compilano da soli.</p>` : ''}
+    <button class="btn sec2" id="s-csv">Esporta CSV</button>
+    <button class="btn sec2" id="s-sync">Sincronizza ora</button>
+    <p class="hint">Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>`,
+  ov => {
+    ov.querySelector('#s-save').onclick = () => {
+      cfg.user = ov.querySelector('#s-user').value.trim() || cfg.user;
+      cfg.pos = ov.querySelector('#s-pos').value.split(',').map(s => s.trim()).filter(Boolean);
+      cfg.url = ov.querySelector('#s-url').value.trim();
+      cfg.token = ov.querySelector('#s-tok').value.trim();
+      save(LS.cfg, cfg); closeSheet(); render(); sync(); toast('Salvato');
+    };
+    const sh = ov.querySelector('#s-share');
+    if (sh) sh.onclick = () => shareText('Dispensa – link di configurazione', shareLink);
+    ov.querySelector('#s-csv').onclick = exportCsv;
+    ov.querySelector('#s-sync').onclick = () => { closeSheet(); sync(); };
+  });
+}
+
+/* ================= SCANNER ================= */
+let qr = null, scanMode = load(LS.mode, 'out'), lastCode = '', lastAt = 0, busy = false;
+
+function setMode(m){
+  scanMode = m; save(LS.mode, m);
+  document.querySelectorAll('#mode button').forEach(b => {
+    b.classList.toggle('on', b.dataset.m === m);
+    b.classList.toggle('out', b.dataset.m === 'out'); b.classList.toggle('inn', b.dataset.m === 'in');
+  });
+  scanMsg({out:'Ogni scansione toglie 1', in:'Ogni scansione aggiunge 1', ask:'Inquadra il codice a barre'}[m]);
+}
+function scanMsg(t){ $('#scan-msg').textContent = t; }
+
+async function openScanner(){
+  $('#scan').classList.remove('hidden'); setMode(scanMode); busy = false;
+  if (typeof Html5Qrcode === 'undefined') { scanMsg('Scanner non caricato (offline?). Digita il codice.'); return; }
+  try {
+    const F = Html5QrcodeSupportedFormats;
+    qr = new Html5Qrcode('reader', {verbose:false,
+      formatsToSupport:[F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.QR_CODE],
+      experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
+    const w = Math.min(window.innerWidth * .8, 320);
+    await qr.start({facingMode:'environment'}, {fps:12, qrbox:{width:w, height:w*.5}, aspectRatio: window.innerHeight / window.innerWidth}, onCode, () => {});
+  } catch(e) {
+    scanMsg('Fotocamera non disponibile: ' + (e.message || e) + ' — digita il codice.');
+  }
+}
+async function closeScanner(){
+  try { if (qr && qr.isScanning) await qr.stop(); qr && qr.clear(); } catch(e){}
+  qr = null; $('#scan').classList.add('hidden');
+}
+function pauseScan(){ try { qr && qr.isScanning && qr.pause(true); } catch(e){} }
+function resumeScan(){ busy = false; try { qr && qr.resume(); } catch(e){} }
+
+function beep(ok = true){
+  try {
+    const a = beep.ctx || (beep.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    const o = a.createOscillator(), g = a.createGain();
+    o.frequency.value = ok ? 1200 : 300; g.gain.value = .08;
+    o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + (ok ? .08 : .2));
+  } catch(e){}
+  navigator.vibrate && navigator.vibrate(ok ? 40 : [60,40,60]);
+}
+
+async function onCode(code){
+  code = String(code).trim();
+  if (!code || busy) return;
+  const now = Date.now();
+  if (code === lastCode && now - lastAt < 2500) return; // anti-doppia lettura
+  lastCode = code; lastAt = now;
+  const it = byCode(code);
+
+  if (it && scanMode !== 'ask') {
+    const d = scanMode === 'in' ? 1 : -1;
+    if (d < 0 && it.qty <= 0) { beep(false); scanMsg(`⚠︎ ${it.nome}: già a 0`); return; }
+    changeQty(it.id, d); beep();
+    scanMsg(`${d > 0 ? '＋' : '−'} ${it.nome} → ${it.qty}${isLow(it) ? '  · in lista spesa' : ''}`);
+    return;
+  }
+
+  busy = true; pauseScan(); beep();
+  if (it) { closeSheet.after = resumeScan; openDetail(it.id); return; }
+
+  // prodotto nuovo → Open Food Facts
+  scanMsg('Nuovo codice, cerco il prodotto…');
+  const pre = await offLookup(code);
+  pre.barcode = code;
+  pre.qty = scanMode === 'out' ? 0 : 1;
+  closeSheet.after = resumeScan;
+  openForm(null, pre);
+}
+
+async function offLookup(code){
+  const base = {offMsg: 'Prodotto non trovato su Open Food Facts: inseriscilo una volta, poi verrà riconosciuto.'};
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=product_name_it,product_name,generic_name_it,brands,quantity,image_front_small_url,categories_tags`, {signal: ctl.signal});
+    clearTimeout(t);
+    const j = await r.json();
+    if (j.status !== 1 || !j.product) return base;
+    const p = j.product;
+    const nome = (p.product_name_it || p.product_name || p.generic_name_it || '').trim();
+    const tags = (p.categories_tags || []).join(' ');
+    const cat = guessCat(tags);
+    return {nome, marca: (p.brands || '').split(',')[0].trim(), formato: (p.quantity || '').trim(),
+      img: p.image_front_small_url || '', categoria: cat, posizione: guessPos(tags, cat),
+      offMsg: nome ? 'Dati da Open Food Facts: controlla e completa.' : base.offMsg};
+  } catch(e) { return {offMsg: 'Ricerca online non riuscita: inserisci i dati a mano.'}; }
+}
+function guessCat(t){
+  const m = [
+    [/frozen|surgel/, 'Surgelati'], [/baby|infant/, 'Bimbi'],
+    [/pasta|rice|riz|cereal-grains|flours|legumes/, 'Pasta e riso'],
+    [/sauces|condiment|oils|vinegar|spices|salts/, 'Sughi e condimenti'],
+    [/breakfast|biscuit|cookies|rusks|jams|spreads|honey|coffee|teas/, 'Colazione'],
+    [/snack|chocolate|sweets|candies|confection|chips|crisps|desserts/, 'Snack e dolci'],
+    [/beverage|drinks|waters|juices|wines|beers|sodas/, 'Bevande'],
+    [/dair|cheese|yogurt|milk|butter|cream/, 'Latticini'],
+    [/meat|fish|seafood|sausage|ham|tuna/, 'Carne e pesce'],
+    [/canned|preserves|conserve/, 'Conserve'],
+    [/fruit|vegetable|plant-based-foods(?!-and)/, 'Frutta e verdura'],
+  ];
+  for (const [re, c] of m) if (re.test(t)) return c;
+  return 'Altro';
+}
+function guessPos(t, cat){
+  const p = positions();
+  if (cat === 'Surgelati' && p.includes('Freezer')) return 'Freezer';
+  if (/fresh|yogurt|cheeses|milk(?!-powder)|butter|cream|ham|sausage/.test(t) && !/uht|long-life|canned/.test(t) && p.includes('Frigo')) return 'Frigo';
+  return p[0];
+}
+
+/* ================= UTIL ================= */
+function toast(t){
+  const el = $('#toast'); el.textContent = t; el.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+async function shareText(title, text){
+  if (navigator.share) { try { await navigator.share({title, text}); return; } catch(e){ if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(text); toast('Copiato negli appunti'); } catch(e){ prompt('Copia:', text); }
+}
+function exportCsv(){
+  const cols = ['nome','marca','formato','categoria','posizione','qty','scortaMin','scadenza','barcode','note'];
+  const csv = [cols.join(';')].concat(items.map(i => cols.map(c => `"${String(i[c] ?? '').replace(/"/g,'""')}"`).join(';'))).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], {type:'text/csv'}));
+  a.download = 'dispensa-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+}
+
+/* ================= EVENTI ================= */
+function start(){
+  $('#setup').classList.add('hidden'); $('#app').classList.remove('hidden');
+  if (!cfg.pos) cfg.pos = DEF_POS;
+  render(); sync();
+}
+document.addEventListener('click', e => {
+  const t = e.target;
+  const qb = t.closest('.row .qb');
+  if (qb) { const it = changeQty(qb.dataset.id, +qb.dataset.d); if (it && isLow(it) && +qb.dataset.d < 0) toast(`${it.nome} → lista spesa`); return; }
+  const op = t.closest('[data-open]'); if (op) return openDetail(op.dataset.open);
+  const th = t.closest('.row .thumb'); if (th) return openDetail(th.parentElement.dataset.id);
+  const ch = t.closest('#chips .chip'); if (ch) { filter = ch.dataset.f; render(); window.scrollTo(0,0); return; }
+  const tb = t.closest('.tab'); if (tb) { tab = tb.dataset.tab; render(); window.scrollTo(0,0); return; }
+  if (t.closest('#share')) {
+    const list = items.filter(isLow).filter(i => !ticks[i.id]);
+    return shareText('Lista spesa', '🛒 Lista spesa\n' + list.map(i => `• ${i.nome}${i.marca ? ' (' + i.marca + ')' : ''} ×${i.scortaMin - i.qty}`).join('\n'));
+  }
+  if (t.closest('#untick')) { ticks = {}; save(LS.ticks, ticks); render(); }
+});
+document.addEventListener('change', e => {
+  const tk = e.target.dataset?.tick;
+  if (tk) { if (e.target.checked) ticks[tk] = 1; else delete ticks[tk]; save(LS.ticks, ticks); render(); }
+});
+$('#q').addEventListener('input', e => { query = e.target.value.trim(); renderInv(); });
+$('#b-scan').onclick = openScanner;
+$('#b-add').onclick = () => openForm(null);
+$('#b-set').onclick = openSettings;
+$('#scan-x').onclick = closeScanner;
+$('#mode').onclick = e => { const b = e.target.closest('[data-m]'); if (b) setMode(b.dataset.m); };
+$('#scan-go').onclick = () => { const v = $('#scan-man').value.trim(); if (v) { $('#scan-man').value = ''; lastCode = ''; onCode(v); } };
+$('#scan-man').addEventListener('keydown', e => { if (e.key === 'Enter') $('#scan-go').click(); });
+// il form aperto dallo scanner deve stare sopra lo scanner
+new MutationObserver(() => { $('#sheet-root').style.cssText = $('#sheet-root').innerHTML ? 'position:relative;z-index:40' : ''; })
+  .observe($('#sheet-root'), {childList:true});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && cfg) sync(); });
+window.addEventListener('online', () => cfg && sync());
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if (cfg) start(); else initSetup();
+</script>
+</body>
+</html>
