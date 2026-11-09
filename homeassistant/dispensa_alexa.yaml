@@ -1,0 +1,74 @@
+# =====================================================================
+# DISPENSA ⇄ Lista spesa Alexa — pacchetto Home Assistant (v1.1.1)
+# Requisiti: HA ≥ 2026.7 con integrazione "Alexa Devices" configurata.
+#
+# Installazione:
+# 1. configuration.yaml → sotto "homeassistant:" aggiungi (se non c'è):
+#       homeassistant:
+#         packages: !include_dir_named packages
+# 2. Crea la cartella /config/packages/ e copia qui questo file.
+# 3. In /config/secrets.yaml aggiungi UNA riga (URL /exec + token):
+#       dispensa_url: "https://script.google.com/macros/s/XXXX/exec?token=IL-TUO-TOKEN"
+# 4. Sostituisci sotto todo.alexa_shopping_list con il nome esatto della tua entità.
+# 5. Strumenti per sviluppatori → YAML → Verifica configurazione → Riavvia.
+# =====================================================================
+
+rest_command:
+  dispensa_alexa_sync:
+    url: !secret dispensa_url
+    method: POST
+    content_type: "text/plain"
+    timeout: 45
+    payload: '{{ {"action": "alexaSync", "alexa": items} | to_json }}'
+
+automation:
+  - id: dispensa_alexa_sync
+    alias: "Dispensa ⇄ Alexa lista spesa"
+    description: "Allinea la lista spesa dell'app Dispensa con quella di Alexa"
+    mode: queued
+    max: 2
+    triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: state            # cambia la lista Alexa o torna disponibile dopo un blocco Amazon
+        entity_id: todo.alexa_shopping_list
+    conditions:                   # se Amazon limita le richieste, salta il giro (riprova al successivo)
+      - condition: template
+        value_template: "{{ states('todo.alexa_shopping_list') not in ['unavailable', 'unknown'] }}"
+    actions:
+      - action: todo.get_items
+        target:
+          entity_id: todo.alexa_shopping_list
+        data:
+          status: [needs_action, completed]
+        response_variable: lista
+
+      - action: rest_command.dispensa_alexa_sync
+        data:
+          items: "{{ lista['todo.alexa_shopping_list']['items'] }}"
+        response_variable: risposta
+
+      - condition: template
+        value_template: >-
+          {{ risposta.status == 200 and risposta.content is mapping and risposta.content.ok }}
+
+      - repeat:
+          for_each: "{{ risposta.content.complete }}"
+          sequence:
+            - action: todo.update_item
+              target:
+                entity_id: todo.alexa_shopping_list
+              data:
+                item: "{{ repeat.item }}"
+                status: completed
+              continue_on_error: true
+
+      - repeat:
+          for_each: "{{ risposta.content.add }}"
+          sequence:
+            - action: todo.add_item
+              target:
+                entity_id: todo.alexa_shopping_list
+              data:
+                item: "{{ repeat.item }}"
+              continue_on_error: true
