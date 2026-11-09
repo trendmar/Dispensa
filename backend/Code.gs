@@ -12,15 +12,15 @@
  */
 
 const VERSION = '1.1';
-const TOKEN = 'CAMBIA-QUESTO-TOKEN';
+const TOKEN = 'CAMBIA-QUESTO-TOKEN'; // segnaposto, non usato: il token vero sta nella proprietà script TOKEN
 const STORICO_MESI = 12;
 
 const SH_P = 'Prodotti', SH_S = 'Spesa', SH_M = 'Movimenti';
 const COLS = ['id', 'barcode', 'nome', 'marca', 'formato', 'categoria', 'posizione',
-              'qty', 'scortaMin', 'scadenza', 'note', 'img', 'updated', 'updatedBy', 'stato'];
+              'qty', 'scortaMin', 'scadenza', 'note', 'img', 'updated', 'updatedBy', 'stato', 'lotti'];
 const SCOLS = ['id', 'nome', 'stato', 'quando', 'utente'];
 const MCOLS = ['quando', 'id', 'nome', 'op', 'delta', 'qtyDopo', 'utente'];
-const TEXT_COLS = ['id', 'barcode', 'scadenza', 'updated']; // testo: zeri iniziali, date ISO
+const TEXT_COLS = ['id', 'barcode', 'scadenza', 'updated', 'lotti']; // testo: zeri iniziali, date ISO, JSON dei lotti
 
 // BEGIN lots.js
 /* Riferimento per la rev. 1.2: logica pura dei lotti, identica lato app e lato Code.gs.
@@ -107,26 +107,59 @@ function applyDelta(item, delta, lotDate) {
 
 /* ================= SETUP (idempotente: si può rieseguire) ================= */
 
+/** Il token sta SOLO nella proprietà script TOKEN (Q6): la costante qui sopra è un segnaposto. */
+function getToken_() { return PropertiesService.getScriptProperties().getProperty('TOKEN') || ''; }
+function tokenOk_(t) { const k = getToken_(); return k !== '' && String(t || '') === k; }
+
+/**
+ * Non modifica, sposta o cancella righe di dati (R3.1): aggiunge l'intestazione "lotti" in P1,
+ * il formato testo della colonna 16 e i trigger. Tutti i controlli vengono PRIMA di qualsiasi scrittura (R3.3).
+ */
 function setup() {
+  if (!getToken_()) throw new Error('Manca la proprietà script TOKEN: aggiungila (stesso valore del token attuale) e riesegui setup().');
   const ss = SpreadsheetApp.getActive();
-  const p = getOrCreate(ss, SH_P);
-  header(p, COLS);
-  TEXT_COLS.forEach(c => p.getRange(1, COLS.indexOf(c) + 1, p.getMaxRows()).setNumberFormat('@'));
+  let p = ss.getSheetByName(SH_P);
+  const nuovo = !p || p.getLastRow() === 0;
+  if (!nuovo) checkProdotti_(p);
 
+  if (nuovo) {
+    p = getOrCreate(ss, SH_P);
+    header(p, COLS);
+    TEXT_COLS.forEach(c => p.getRange(1, COLS.indexOf(c) + 1, p.getMaxRows()).setNumberFormat('@'));
+  } else {
+    if (p.getMaxColumns() < COLS.length) p.insertColumnsAfter(p.getMaxColumns(), COLS.length - p.getMaxColumns());
+    p.getRange(1, COLS.length).setValue('lotti').setFontWeight('bold');
+    p.getRange(1, COLS.length, p.getMaxRows()).setNumberFormat('@');
+  }
   const s = getOrCreate(ss, SH_S);
-  header(s, SCOLS);
-  s.getRange(1, 1, s.getMaxRows()).setNumberFormat('@');
-
-  header(getOrCreate(ss, SH_M), MCOLS);
+  if (s.getLastRow() === 0) { header(s, SCOLS); s.getRange(1, 1, s.getMaxRows()).setNumberFormat('@'); }
+  const m = getOrCreate(ss, SH_M);
+  if (m.getLastRow() === 0) header(m, MCOLS);
 
   const def = ss.getSheetByName('Foglio1') || ss.getSheetByName('Sheet1');
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 3) ss.deleteSheet(def);
 
-  // trigger mensile di pulizia storico (il 1° del mese alle 3)
+  // trigger: pulizia storico (il 1° del mese alle 3) e copia di sicurezza settimanale (domenica alle 4)
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'pulisciStorico')
+    .filter(t => ['pulisciStorico', 'snapshot'].indexOf(t.getHandlerFunction()) >= 0)
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('pulisciStorico').timeBased().onMonthDay(1).atHour(3).create();
+  ScriptApp.newTrigger('snapshot').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(4).create();
+}
+
+/** Lancia un errore (senza aver scritto nulla) se il foglio Prodotti non è nello stato atteso. */
+function checkProdotti_(p) {
+  const w = Math.min(COLS.length, p.getMaxColumns());
+  const head = p.getRange(1, 1, 1, w).getValues()[0];
+  if (w === COLS.length && head[w - 1] !== '' && head[w - 1] !== 'lotti')
+    throw new Error('La cella P1 contiene "' + head[w - 1] + '": setup si ferma. Libera la colonna 16 o controlla il foglio.');
+  for (let i = 0; i < COLS.length - 1; i++)
+    if (head[i] !== '' && head[i] !== COLS[i]) throw new Error('Prodotti: intestazione inattesa in colonna ' + (i + 1) + ' ("' + head[i] + '", attesa "' + COLS[i] + '").');
+  const n = p.getLastRow() - 1;
+  if (n < 1) return;
+  p.getRange(2, 1, n, w).getValues().forEach((r, i) => {
+    if (String(r[0]) === '' && r.some(v => v !== '')) throw new Error('Prodotti riga ' + (i + 2) + ': celle valorizzate ma id vuoto (riga senza id). Correggi o elimina la riga, poi riesegui setup().');
+  });
 }
 
 function getOrCreate(ss, name) { return ss.getSheetByName(name) || ss.insertSheet(name); }
@@ -138,7 +171,7 @@ function header(sh, cols) {
 /* ================= HTTP ================= */
 
 function doGet(e) {
-  if ((e.parameter.token || '') !== TOKEN) return out({ ok: false, error: 'token' });
+  if (!tokenOk_(e.parameter.token)) return out({ ok: false, error: 'token' });
   const db = openDb();
   return out({ ok: true, version: VERSION, items: db.items, extras: db.extras });
 }
@@ -146,7 +179,7 @@ function doGet(e) {
 function doPost(e) {
   let req;
   try { req = JSON.parse(e.postData.contents); } catch (x) { return out({ ok: false, error: 'json' }); }
-  if ((req.token || e.parameter.token) !== TOKEN) return out({ ok: false, error: 'token' });
+  if (!tokenOk_(req.token || e.parameter.token)) return out({ ok: false, error: 'token' });
 
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -423,6 +456,88 @@ function pulisciStorico() {
     while (k < d.length && d[k][0] instanceof Date && d[k][0] < lim) k++;
     if (k === d.length) m.getRange(2, 1, k, MCOLS.length).clearContent(); // tutto vecchio
     else if (k) m.deleteRows(2, k);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ================= Strumenti di sicurezza dati (§6.4) ================= */
+
+const ISO_ = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Sola lettura di Prodotti: elenco di anomalie [tipo, riga, id, nome, dettaglio]. */
+function auditFindings_(rows) {
+  const f = [], ids = {}, codes = {};
+  const add = (tipo, riga, r, det) => f.push([tipo, riga, String(r[0]), String(r[2]), det || '']);
+  rows.forEach((r, i) => {
+    const riga = i + 2;
+    if (r.every(v => v === '')) return;
+    if (String(r[0]) === '') { add('riga senza id', riga, r); return; }
+    const id = String(r[0]);
+    if (ids[id]) add('id duplicato', riga, r, 'già alla riga ' + ids[id]); else ids[id] = riga;
+    const bc = String(r[1] || '');
+    if (bc) { if (codes[bc]) add('barcode duplicato', riga, r, 'già alla riga ' + codes[bc]); else codes[bc] = riga; }
+    if (typeof r[2] === 'number') add('nome numerico', riga, r);
+    if (r[7] !== '' && isNaN(Number(r[7]))) add('qty non numerica', riga, r, String(r[7]));
+    if (r[8] !== '' && isNaN(Number(r[8]))) add('scortaMin non numerica', riga, r, String(r[8]));
+    const sc = r[9];
+    if (sc instanceof Date) add('data non ISO', riga, r, 'scadenza è una Date (verrà convertita in testo)');
+    else if (sc !== '' && !ISO_.test(String(sc))) add('data non ISO', riga, r, 'scadenza "' + sc + '"');
+    const lotti = r[15];
+    if (lotti !== '' && lotti !== undefined) {
+      let a = null;
+      try { a = JSON.parse(lotti); } catch (e) { a = null; }
+      if (!Array.isArray(a)) add('lotti non valida', riga, r, String(lotti).slice(0, 60));
+      else {
+        const tot = a.reduce((s2, l) => s2 + (Number(l && l.q) || 0), 0);
+        if (tot !== (Number(r[7]) || 0)) add('lotti somma diversa da qty', riga, r, 'lotti ' + tot + ', qty ' + (Number(r[7]) || 0));
+        a.forEach(l => { if (l && l.d && !ISO_.test(String(l.d))) add('data non ISO', riga, r, 'lotto "' + l.d + '"'); });
+      }
+    }
+  });
+  return f;
+}
+
+function auditDb() {
+  const ss = SpreadsheetApp.getActive();
+  const p = ss.getSheetByName(SH_P);
+  const n = Math.max(0, p.getLastRow() - 1);
+  const w = Math.min(COLS.length, p.getMaxColumns());
+  const rows = n ? p.getRange(2, 1, n, w).getValues().map(r => r.concat(Array(COLS.length - w).fill(''))) : [];
+  const f = auditFindings_(rows);
+  const a = getOrCreate(ss, 'Audit');
+  a.clear();
+  const res = [['tipo', 'riga', 'id', 'nome', 'dettaglio']].concat(f);
+  a.getRange(1, 1, res.length, 5).setValues(res);
+  console.log('auditDb: ' + f.length + ' anomalie su ' + rows.length + ' righe');
+  return f.length;
+}
+
+/** Copia Prodotti e Spesa in fogli _bak_*. Non cancella mai nulla: i backup si eliminano a mano. */
+function snapshot() {
+  const ss = SpreadsheetApp.getActive();
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmm');
+  [SH_P, SH_S].forEach(name => {
+    const base = '_bak_' + stamp + '_' + name;
+    let nm = base, k = 2;
+    while (ss.getSheetByName(nm)) nm = base + '_' + k++;
+    ss.getSheetByName(name).copyTo(ss).setName(nm);
+  });
+}
+
+/** Prima di riportare il backend alla 1.1: svuota la sola colonna lotti. Restituisce i prodotti coinvolti. */
+function prepareRollback() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const p = SpreadsheetApp.getActive().getSheetByName(SH_P);
+    const n = p.getLastRow() - 1;
+    if (n < 1 || p.getMaxColumns() < COLS.length) return 0;
+    const r = p.getRange(2, COLS.length, n, 1);
+    const k = r.getValues().filter(v => v[0] !== '').length;
+    r.clearContent();
+    console.log('prepareRollback: ' + k + ' prodotti con lotti svuotati');
+    return k;
   } finally {
     lock.releaseLock();
   }
