@@ -74,9 +74,9 @@ function loadBackend(file, opts = {}) {
     setProperty: (k, v) => { props.set(k, String(v)); return propsApi; },
     deleteProperty: k => { props.delete(k); return propsApi; },
   };
-  const cache = new Map(Object.entries(opts.cache || {})); const cachePuts = [];
+  const cache = new Map(Object.entries(opts.cache || {})); const cachePuts = []; const cacheCalls = { getAll: 0 };
   const cacheApi = {
-    getAll: keys => { const o = {}; keys.forEach(k => { if (cache.has(k)) o[k] = cache.get(k); }); return o; },
+    getAll: keys => { cacheCalls.getAll++; const o = {}; keys.forEach(k => { if (cache.has(k)) o[k] = cache.get(k); }); return o; },
     putAll: (o, ttl) => { cachePuts.push({ keys: Object.keys(o), ttl }); Object.keys(o).forEach(k => cache.set(k, o[k])); },
   };
   const triggers = [];
@@ -111,7 +111,7 @@ function loadBackend(file, opts = {}) {
   const fn = vm.runInContext(src + `\n;({${exp}})`, context, { filename: file });
 
   const h = {
-    fn, ss, setSheet, props, cache, cachePuts, triggers, lock, logs,
+    fn, ss, setSheet, props, cache, cachePuts, cacheCalls, triggers, lock, logs,
     eval: code => vm.runInContext(code, context),
     plain: x => (x === undefined ? undefined : JSON.parse(JSON.stringify(x))),
     values: name => {

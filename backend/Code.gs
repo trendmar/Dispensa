@@ -7,11 +7,11 @@
  *   Movimenti — storico azioni (pulito in automatico oltre STORICO_MESI)
  *
  * Primo setup: vedi LEGGIMI.md.
- * Aggiornamento da v1.0: incolla questo file, esegui setup() una volta,
- * poi Gestisci deployment → modifica → Versione: Nuova versione.
+ * Aggiornamento: aggiungi la proprietà script TOKEN, incolla questo file, esegui auditDb() e setup(),
+ * poi Gestisci deployment → modifica → Versione: Nuova versione (mai "Nuovo deployment"). Vedi docs/MIGRAZIONE-v1.2.md.
  */
 
-const VERSION = '1.1';
+const VERSION = '1.2.0';
 const TOKEN = 'CAMBIA-QUESTO-TOKEN'; // segnaposto, non usato: il token vero sta nella proprietà script TOKEN
 const STORICO_MESI = 12;
 
@@ -173,7 +173,7 @@ function header(sh, cols) {
 function doGet(e) {
   if (!tokenOk_(e.parameter.token)) return out({ ok: false, error: 'token' });
   const db = openDb();
-  return out({ ok: true, version: VERSION, items: db.items, extras: db.extras });
+  return out({ ok: true, version: VERSION, items: db.items, extras: db.extras, config: getConfig_() });
 }
 
 function doPost(e) {
@@ -190,11 +190,26 @@ function doPost(e) {
       saveDb(db);
       return out(Object.assign({ ok: true }, res));
     }
-    const results = (req.ops || []).map(op => {
-      try { return applyOp(db, op); } catch (err) { return { ok: false, error: String(err) }; }
+    const t0 = Date.now();
+    const ops = req.ops || [];
+    // idempotenza (Q7): un'operazione con opId già visto non si riapplica. Una getAll e una putAll per richiesta.
+    const keyOf = op => (op && op.opId ? 'op:' + op.opId : '');
+    const keys = ops.map(keyOf).filter(Boolean);
+    const cache = CacheService.getScriptCache();
+    const seen = keys.length ? cache.getAll(keys) : {};
+    const fresh = {};
+    const results = ops.map(op => {
+      const k = keyOf(op);
+      if (k && (seen[k] || fresh[k])) return { ok: true, dup: true };
+      let res;
+      try { res = applyOp(db, op); } catch (err) { return { ok: false, error: String(err) }; }
+      if (k) fresh[k] = '1';
+      return res;
     });
     saveDb(db);
-    return out({ ok: true, version: VERSION, results, items: db.items, extras: db.extras });
+    if (Object.keys(fresh).length) cache.putAll(fresh, 21600);
+    console.log(JSON.stringify({ ops: ops.map(o => o && o.op), ms: Date.now() - t0 }));
+    return out({ ok: true, version: VERSION, results, items: db.items, extras: db.extras, config: getConfig_() });
   } finally {
     lock.releaseLock();
   }
@@ -214,7 +229,7 @@ function openDb() {
   const prow = pn ? p.getRange(2, 1, pn, COLS.length).getValues() : [];
   const srow = sn ? s.getRange(2, 1, sn, SCOLS.length).getValues() : [];
   return {
-    ss, p, s, pn, sn, logs: [], dirtyP: false, dirtyS: false,
+    ss, p, s, pn, sn, logs: [], dirtyP: false, dirtyS: false, catScad: getCatScad_(),
     items: prow.filter(r => r[0] !== '').map(r => toItem(r, tz)),
     extras: srow.filter(r => r[0] !== '').map(r => toObj(r, SCOLS, tz)),
   };
@@ -273,11 +288,16 @@ function applyOp(db, op) {
         // la quantità si aggiorna SOLO per differenza: non annulla le modifiche
         // fatte in parallelo da un altro telefono
         const d = Number(op.qtyDelta) || 0;
+        // R1.4a: lotti non si copia mai dal client; scadenza non si copia se la categoria (dopo l'aggiornamento) è attiva
+        const attiva = db.catScad.indexOf(it.categoria !== undefined ? it.categoria : ex.categoria) >= 0;
         COLS.forEach(c => {
-          if (['id', 'qty', 'updated', 'updatedBy', 'stato'].indexOf(c) < 0 && it[c] !== undefined) ex[c] = it[c];
+          if (['id', 'qty', 'updated', 'updatedBy', 'stato', 'lotti'].indexOf(c) >= 0 || it[c] === undefined) return;
+          if (c === 'scadenza' && attiva) return;
+          ex[c] = it[c];
         });
         ex.scortaMin = Number(ex.scortaMin) || 0;
-        ex.qty = Math.max(0, ex.qty + d);
+        if (attiva) applyTracked_(ex, d, ''); // anche con d = 0: è un tocco, i lotti si materializzano (R1.3)
+        else ex.qty = Math.max(0, ex.qty + d);
         if (d > 0) { ex.stato = ''; chiudiVociLibere(db, ex); }
         touch(ex, user);
         log(db, ex, 'modifica', d, user);
@@ -286,7 +306,11 @@ function applyOp(db, op) {
         COLS.forEach(c => n[c] = it[c] === undefined ? '' : it[c]);
         n.id = String(n.id); n.barcode = String(n.barcode || '');
         n.qty = Math.max(0, Number(n.qty) || 0); n.scortaMin = Number(n.scortaMin) || 0;
-        n.stato = '';
+        n.stato = ''; n.lotti = '';
+        if (isTracked_(db, n)) { // categoria attiva: il primo lotto nasce da qty e scadenza (il client non invia lotti)
+          const lots = n.qty > 0 ? [{ d: isoOrEmpty(n.scadenza), q: n.qty }] : [];
+          n.lotti = serializeLots(lots); n.scadenza = nextExpiry(lots);
+        }
         touch(n, user);
         db.items.push(n);
         log(db, n, 'nuovo', n.qty, user);
@@ -299,12 +323,30 @@ function applyOp(db, op) {
       const ex = byId(op.id);
       if (!ex) return { ok: false, error: 'non trovato' };
       const d = Number(op.delta) || 0;
-      ex.qty = Math.max(0, ex.qty + d);
+      if (isTracked_(db, ex)) applyTracked_(ex, d, op.lot);
+      else ex.qty = Math.max(0, ex.qty + d);
       if (d > 0) { ex.stato = ''; chiudiVociLibere(db, ex); } // caricato → esce dalla lista
       touch(ex, user);
       log(db, ex, d > 0 ? 'carico' : 'scarico', d, user);
       db.dirtyP = true;
       return { ok: true, qty: ex.qty };
+    }
+    case 'lotMove': {                     // sposta unità tra lotti; qty non cambia, nessuna riga in Movimenti
+      const ex = byId(op.id);
+      if (!ex) return { ok: false, error: 'non trovato' };
+      if (!isTracked_(db, ex)) return { ok: true };
+      const lots = moveUnits(effectiveLots(ex), op.from, op.to, Math.max(0, Math.floor(Number(op.q)) || 0));
+      ex.lotti = serializeLots(lots); ex.scadenza = nextExpiry(lots);
+      touch(ex, user);
+      db.dirtyP = true;
+      return { ok: true };
+    }
+    case 'cfgSet': {                      // configurazione condivisa: oggi solo catScad (array di nomi di categoria)
+      if (op.key !== 'catScad') return { ok: false, error: 'chiave non valida' };
+      if (!Array.isArray(op.value) || op.value.some(v => typeof v !== 'string')) return { ok: false, error: 'valore non valido' };
+      db.catScad = op.value.map(v => v.trim()).filter((v, i, a) => v && a.indexOf(v) === i);
+      PropertiesService.getScriptProperties().setProperty('catScad', JSON.stringify(db.catScad));
+      return { ok: true };
     }
     case 'stato': {                       // '' | 'comprare' | 'preso'
       const ex = byId(op.id);
@@ -342,6 +384,23 @@ function applyOp(db, op) {
     }
   }
   return { ok: false, error: 'op sconosciuta' };
+}
+
+/* ================= Lotti e configurazione (R1) ================= */
+
+function getCatScad_() {
+  try {
+    const a = JSON.parse(PropertiesService.getScriptProperties().getProperty('catScad') || '[]');
+    return Array.isArray(a) ? a.filter(v => typeof v === 'string') : [];
+  } catch (e) { return []; }
+}
+const getConfig_ = () => ({ catScad: getCatScad_() });
+const isTracked_ = (db, it) => db.catScad.indexOf(it.categoria) >= 0;
+
+/** delta su prodotto con scadenza attiva: aggiorna qty, lotti e scadenza derivata (R1.6) con l'algoritmo di lots.js */
+function applyTracked_(it, delta, lot) {
+  const r = applyDelta(it, delta, isoOrEmpty(lot));
+  it.qty = r.item.qty; it.lotti = r.item.lotti; it.scadenza = r.item.scadenza;
 }
 
 /* ================= Lista spesa + sincronizzazione Alexa ================= */
