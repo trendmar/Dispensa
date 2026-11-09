@@ -6,6 +6,11 @@ Procedura passo per passo, pensata per **non alterare i dati esistenti** (spec �
 - Se un passo non dà l'esito atteso: **fermati** e non proseguire.
 - Il token non va mai scritto in chat, in file del repository o in messaggi.
 
+## Avvertenze sulle Proprietà script
+
+- Le proprietà sono più d'una: **Aggiungi proprietà script** aggiunge una riga; compila tutte le righe e salva **una volta**. **Non cancellare mai `TOKEN`**: senza, il backend rifiuta ogni richiesta (telefoni e Home Assistant compresi). Imposta `TOKEN` **prima** di incollare il nuovo codice.
+- `catScad` contiene **nomi di categoria** (Latticini, Colazione…), non posizioni (Dispensa, Frigo…), scritti identici alla colonna `categoria`, in **JSON con virgolette doppie dritte**: `["Latticini","Carne e pesce"]`. Senza virgolette o con virgolette tipografiche il valore non è JSON valido e viene trattato come lista vuota, senza errori. In esercizio la lista si imposta dall'app (Impostazioni → Scadenze per categoria), non a mano.
+
 ## Prima di cominciare
 
 | Cosa | Dove |
