@@ -217,9 +217,9 @@ t('"Senza data" è una scelta esplicita: nessun lotMove, ma le unità successive
   await h.app.onCode('123'); h.app.lotChoose(''); h.advance(3000); await h.app.onCode('123');
   eq(ops(h).map(o => o.op), ['delta', 'delta']); assert.strictEqual(ops(h)[1].lot, ''); assert.strictEqual(h.app.lp, null);
 });
-t('pannello scaduto senza scelta (8 s): niente lotMove, ricompare alla scansione successiva; un altro prodotto lo sostituisce', async () => {
+t('pannello scaduto senza scelta (15 s): niente lotMove, ricompare alla scansione successiva; un altro prodotto lo sostituisce', async () => {
   const h = await mkT(); h.app.openScanner();
-  await h.app.onCode('123'); h.advance(7999); assert.ok(h.app.lp); h.advance(2); assert.strictEqual(h.app.lp, null);
+  await h.app.onCode('123'); h.advance(14999); assert.ok(h.app.lp); h.advance(2); assert.strictEqual(h.app.lp, null);
   eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.inherit, null);
   h.advance(3000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1);
   h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2'); assert.strictEqual(h.app.lp.n, 1);
@@ -274,6 +274,20 @@ t('lotto ereditato: un altro prodotto in mezzo lo annulla, lo stesso codice rich
   h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.inherit, null); h.app.lotChoose('');
   h.advance(3000); await h.app.onCode('123');
   assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
+});
+
+t('selettore data aperto: il pannello non si chiude per timeout e le letture sono ignorate; dopo 20 s senza scelta si chiude', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
+  h.advance(7000); h.app.lotPickStart();                    // tap su "📅 Scegli" (iOS non invia focus)
+  h.advance(18000); assert.ok(h.app.lp, 'ancora aperto dopo 25 s dalla scansione');
+  h.advance(1000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual(ops(h).length, 1, 'lettura ignorata col selettore aperto');
+  h.advance(20000); assert.strictEqual(h.app.lp, null);
+  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2');   // poi lo scanner torna libero
+});
+t('selettore data: la scelta chiude il pannello, registra un solo lotMove e libera lo scanner', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart(); h.app.lotChoose('2026-12-24');
+  assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta', 'lotMove']);
+  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2');
 });
 
 (async () => {
