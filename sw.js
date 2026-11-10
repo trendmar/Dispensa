@@ -1,5 +1,5 @@
 // cache minima: l'app si apre anche senza rete (i dati restano in locale e si sincronizzano dopo)
-const C = 'dispensa-v1.1';
+const C = 'dispensa-v1.2';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(SHELL)).catch(()=>{})); self.skipWaiting(); });

@@ -17,6 +17,8 @@ async function mk(o = {}) {
 const hang = (url, opts) => new Promise((res, rej) => opts.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
 const okResp = items => ({ json: async () => ({ ok: true, version: '1.2.0', items, extras: [], config: { catScad: [] } }) });
 const msg = h => h.el('#scan-msg').rec.textContent;
+// operazioni generate dall'app dall'inizio del test: già inviate (POST) + ancora in coda (la sync può svuotare `pending`)
+const opsMade = h => h.calls.filter(c => c.opts && c.opts.method === 'POST').reduce((s, c) => s + JSON.parse(c.opts.body).ops.length, 0) + h.app.pending.length;
 const flashes = h => h.el('#flash').rec.classNames.filter(c => c.startsWith('go'));
 
 t('decideRead: stesso codice inquadrato 3 s → una sola lettura, poi silenzio', () => {
@@ -73,7 +75,7 @@ t('queue assegna opId univoci e la coda mantiene l\'ordine; la POST li invia', a
   let post;
   const h = await mk({ fetchImpl: async (u, o) => { if (o && o.method === 'POST') post = JSON.parse(o.body); return okResp(ITEMS()); } });
   h.app.queue({ op: 'delta', id: 'p1', delta: 1 }); h.app.queue({ op: 'delta', id: 'p2', delta: -1 });
-  const ids = h.app.pending.map(o => o.opId);
+  const ids = h.plain(h.app.pending.map(o => o.opId));
   assert.ok(ids.every(Boolean) && new Set(ids).size === ids.length);
   eq(h.store('disp.pend').map(o => o.id), ['p1', 'p2']);
   await h.flush(); eq(post.ops.map(o => o.opId), ids); eq(post.ops.map(o => o.id), ['p1', 'p2']);
@@ -89,21 +91,21 @@ t('onCode: scarico sotto scorta → flash corallo e "in lista spesa"; già a zer
   const h = await mk({ ls: { 'disp.cfg': CFG, 'disp.items': ITEMS(), 'disp.mode': 'out' } }); h.app.openScanner();
   await h.app.onCode('456');
   eq(flashes(h), ['go out']); assert.strictEqual(msg(h), '− Latte · 2 → 1 · in lista spesa');
-  const n = h.app.pending.length; h.advance(5000);
+  const n = opsMade(h); h.advance(5000);
   await h.app.onCode('789');
-  eq(flashes(h), ['go out', 'go warn']); assert.strictEqual(msg(h), '⚠︎ Pasta · già a 0'); assert.strictEqual(h.app.pending.length, n);
+  eq(flashes(h), ['go out', 'go warn']); assert.strictEqual(msg(h), '⚠︎ Pasta · già a 0'); assert.strictEqual(opsMade(h), n);
 });
 t('onCode: stesso codice tenuto 3 s → un solo carico, un solo flash, messaggio invariato', async () => {
   const h = await mk(); h.app.openScanner(); await h.app.onCode('123');
   const m = msg(h);
   for (let i = 0; i < 30; i++) { h.advance(100); await h.app.onCode('123'); }
-  assert.strictEqual(h.app.pending.length, 1); eq(flashes(h), ['go in']); assert.strictEqual(msg(h), m);
+  assert.strictEqual(opsMade(h), 1); eq(flashes(h), ['go in']); assert.strictEqual(msg(h), m);
 });
 t('onCode: codice tolto 1 s e riinquadrato entro 2,5 s → flash grigio, "Già letto", nessuna operazione', async () => {
   const h = await mk(); h.app.openScanner(); await h.app.onCode('123');
   h.advance(300); await h.app.onCode('123'); h.advance(1000);
   await h.app.onCode('123');
-  eq(flashes(h), ['go in', 'go dup']); assert.strictEqual(msg(h), 'Già letto, attendi un attimo'); assert.strictEqual(h.app.pending.length, 1);
+  eq(flashes(h), ['go in', 'go dup']); assert.strictEqual(msg(h), 'Già letto, attendi un attimo'); assert.strictEqual(opsMade(h), 1);
 });
 t('onCode: 10 codici diversi in 10 s → ogni flash riparte pulito (classe tolta e riaggiunta)', async () => {
   const h = await mk(); h.app.openScanner();

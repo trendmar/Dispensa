@@ -112,7 +112,40 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 #scan .foot{padding:10px 12px calc(14px + var(--safe-b));display:flex;gap:8px}
 #scan .foot input{flex:1;padding:12px;border-radius:12px;border:0;background:#222;color:#fff;outline:none}
 #scan .foot button{padding:0 16px;border-radius:12px;background:#333;color:#fff}
-#scan .msg{text-align:center;font-size:14px;color:#ccc;padding:6px 12px;min-height:28px}
+#scan .msg{text-align:center;font-size:16px;font-weight:700;color:#ccc;padding:6px 12px;min-height:30px}
+#scan .msg.in{color:#4cc18a}
+#scan .msg.out{color:#f2827a}
+#scan .msg.warn{color:#f0a35c}
+#scan .msg.dup{color:#9aa19d}
+.scan-sync{font-size:13px;color:#ccc;min-width:48px;text-align:right;white-space:nowrap}
+#flash{position:absolute;inset:0;z-index:5;pointer-events:none;opacity:0;display:grid;place-items:center;font-size:96px;font-weight:700;color:rgba(255,255,255,.95)}
+#flash.go{animation:flashgo .35s ease-out}
+#flash.in{background:rgba(76,193,138,.55)}
+#flash.out{background:rgba(242,130,122,.55)}
+#flash.warn{background:rgba(240,163,92,.55)}
+#flash.dup{background:rgba(154,161,157,.55)}
+#flash.in::after{content:'＋'}
+#flash.out::after{content:'−'}
+#flash.warn::after{content:'!'}
+#flash.dup::after{content:'⟲'}
+@keyframes flashgo{0%{opacity:1}100%{opacity:0}}
+@keyframes flashfade{0%{opacity:1}100%{opacity:0}}
+@keyframes plin{0%{background:var(--acc2)}100%{background:var(--card)}}
+@keyframes plout{0%{background:var(--bad2)}100%{background:var(--card)}}
+@keyframes qvjump{0%{transform:scale(1)}40%{transform:scale(1.35)}100%{transform:scale(1)}}
+.row.pl-in{animation:plin .3s ease-out}
+.row.pl-out{animation:plout .3s ease-out}
+.row.pl-in .qv,.row.pl-out .qv,.qv.jump{animation:qvjump .3s ease-out}
+@media (prefers-reduced-motion:reduce){
+  #flash.go{animation:flashfade .25s linear}
+  #flash.in{background:transparent;box-shadow:inset 0 0 0 10px #4cc18a}
+  #flash.out{background:transparent;box-shadow:inset 0 0 0 10px #f2827a}
+  #flash.warn{background:transparent;box-shadow:inset 0 0 0 10px #f0a35c}
+  #flash.dup{background:transparent;box-shadow:inset 0 0 0 10px #9aa19d}
+  #flash::after{content:''!important}
+  .row.pl-in,.row.pl-out{animation:none;background:var(--acc2)}
+  .row.pl-in .qv,.row.pl-out .qv,.qv.jump{animation:none}
+}
 
 #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + var(--safe-b));z-index:50;background:var(--ink);color:var(--bg);padding:11px 16px;border-radius:12px;font-size:15px;max-width:90vw;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.show{opacity:1}
@@ -168,10 +201,12 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
       <button data-m="ask">Chiedi</button>
       <button data-m="in">+ Carica</button>
     </div>
+    <span class="scan-sync" id="scan-sync"></span>
     <button class="ibtn" id="scan-x" style="color:#fff">✕</button>
   </div>
   <div id="reader"></div>
-  <div class="msg" id="scan-msg">Inquadra il codice a barre</div>
+  <div id="flash"></div>
+  <div class="msg" id="scan-msg" aria-live="polite">Inquadra il codice a barre</div>
   <div class="foot">
     <input id="scan-man" inputmode="numeric" placeholder="…o digita il codice">
     <button id="scan-go">OK</button>
@@ -183,8 +218,8 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 
 <script>
 /* ================= CONFIG / STATO ================= */
-const VERSION = '1.1';
-const LS = {cfg:'disp.cfg', items:'disp.items', extras:'disp.extras', pend:'disp.pend', mode:'disp.mode'};
+const VERSION = '1.2.0';
+const LS = {cfg:'disp.cfg', items:'disp.items', extras:'disp.extras', pend:'disp.pend', mode:'disp.mode', srv:'disp.srv'};
 const DEF_POS = ['Dispensa','Frigo','Freezer','Cantina'];
 const DEF_CAT = ['Pasta e riso','Conserve','Sughi e condimenti','Colazione','Snack e dolci','Bevande',
   'Latticini','Carne e pesce','Frutta e verdura','Surgelati','Bimbi','Casa e pulizia','Altro'];
@@ -281,7 +316,8 @@ let items = load(LS.items, []);
 let pending = load(LS.pend, []);
 let extras = load(LS.extras, []);
 let tab = 'inv', filter = 'all', query = '';
-let syncing = false, syncErr = '';
+let syncing = false, syncErr = '', retryT = 0, scanOpen = false;
+let srv = load(LS.srv, {version: '', config: null});   // ultima versione/config noti del backend
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -315,7 +351,7 @@ function initSetup(){
     try {
       const r = await apiGet(c);
       if (!r.ok) throw new Error(r.error === 'token' ? 'Token errato' : r.error);
-      cfg = c; save(LS.cfg, cfg); items = r.items; save(LS.items, items);
+      noteSrv(r); cfg = c; save(LS.cfg, cfg); items = r.items; save(LS.items, items);
       start();
     } catch(e) { toast('Errore: ' + e.message); $('#su-go').textContent = 'Collega'; }
   };
@@ -324,40 +360,63 @@ function initSetup(){
 }
 
 /* ================= BACKEND ================= */
-async function apiGet(c = cfg){
-  const r = await fetch(c.url + '?token=' + encodeURIComponent(c.token) + '&_=' + Date.now());
-  return r.json();
+// fetch con timeout (Q2): senza risposta entro `ms` la richiesta viene annullata (AbortError)
+async function fetchJson(url, opts, ms = 45000){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, Object.assign({}, opts, {signal: ctl.signal})); return await r.json(); }
+  finally { clearTimeout(t); }
 }
-async function apiPost(ops){
-  // text/plain evita il preflight CORS con Apps Script
-  const r = await fetch(cfg.url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({token: cfg.token, ops})});
-  return r.json();
+const apiGet = (c = cfg) => fetchJson(c.url + '?token=' + encodeURIComponent(c.token) + '&_=' + Date.now());
+// text/plain evita il preflight CORS con Apps Script
+const apiPost = ops => fetchJson(cfg.url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({token: cfg.token, ops})});
+// confronto di versioni per componenti numerici: '1.10' > '1.2', '1.2.0' = '1.2'
+function cmpVersion(a, b){
+  const x = String(a || '').split('.').map(Number), y = String(b || '').split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d < 0 ? -1 : 1; }
+  return 0;
 }
+function noteSrv(r){ srv = {version: String(r.version || ''), config: r.config || null}; save(LS.srv, srv); }
 function queue(op){
-  op.user = cfg.user;
+  op.user = cfg.user; op.opId = uid();   // opId: il backend scarta i rinvii di una richiesta persa (Q7)
   if (cfg.url) { pending.push(op); save(LS.pend, pending); }
   save(LS.items, items); save(LS.extras, extras);
-  render(); sync();
+  render();
+  Promise.resolve().then(sync);          // più operazioni nello stesso istante partono in una sola richiesta
 }
 async function sync(){
-  if (!cfg.url) { setSync(''); return; }
+  clearTimeout(retryT);
+  if (!cfg.url) { updateSync(); return; }
   if (syncing) { sync.again = true; return; }
-  syncing = true; setSync('⟳');
+  syncing = true; updateSync();
   try {
     const batch = pending.slice();
     const r = batch.length ? await apiPost(batch) : await apiGet();
     if (!r.ok) throw new Error(r.error);
+    noteSrv(r);
     pending = pending.slice(batch.length); save(LS.pend, pending);
     if (!pending.length) { items = r.items; extras = r.extras || []; save(LS.items, items); save(LS.extras, extras); }
-    syncErr = ''; setSync('');
+    syncErr = '';
   } catch(e) {
-    syncErr = e.message || 'offline'; setSync(`⚠︎ ${pending.length || ''} non sincr.`, true);
-  }
-  syncing = false;
-  render();
+    syncErr = e.name === 'AbortError' ? 'timeout' : (e.message || 'offline');
+  } finally { syncing = false; }
+  updateSync(); render();
+  if (syncErr && pending.length) retryT = setTimeout(() => { if (!document.hidden) sync(); }, 30000);
   if (sync.again) { sync.again = false; sync(); }
 }
-function setSync(t, err){ const s = $('#sync'); s.textContent = t; s.classList.toggle('err', !!err); }
+// ✓ tutto inviato · ⟳ in invio · · N in coda · ⚠︎ N errore · offline · N senza rete
+function syncLabel({syncing, pending, err, online}){
+  if (!online) return `offline · ${pending}`;
+  if (syncing) return '⟳';
+  if (err) return `⚠︎ ${pending}`;
+  return pending > 0 ? `· ${pending}` : '✓';
+}
+function updateSync(){
+  const n = pending.length, online = navigator.onLine !== false;
+  const l = syncLabel({syncing, pending: n, err: syncErr, online});
+  $('#scan-sync').textContent = l;
+  const s = $('#sync'), bad = !!syncErr && online && !syncing;
+  s.textContent = bad ? `⚠︎ ${n || ''} non sincr.` : (l === '✓' ? '' : l); s.classList.toggle('err', bad);
+}
 
 /* ================= LOGICA ================= */
 function daysTo(d){
@@ -386,7 +445,16 @@ function changeQty(id, delta){
   it.qty += delta;
   if (delta > 0) it.stato = '';
   queue({op:'delta', id, delta});
+  hl(id, delta);
   return it;
+}
+// R2.4: evidenzia per 300 ms la riga (e il numero) appena cambiata
+function hl(id, delta){
+  const c = delta > 0 ? 'pl-in' : 'pl-out';
+  document.querySelectorAll(`.row[data-id="${id}"]`).forEach(r => {
+    r.classList.remove('pl-in', 'pl-out'); void r.offsetWidth; r.classList.add(c);
+    setTimeout(() => r.classList.remove(c), 300);
+  });
 }
 // qtyDelta: la quantità di un prodotto esistente cambia solo per differenza (no sovrascritture tra telefoni)
 function upsert(it, qtyDelta){
@@ -427,6 +495,7 @@ function row(it){
   </div>`;
 }
 function render(){
+  if (scanOpen) return;   // con lo scanner aperto la lista non si ridisegna: lo fa closeScanner()
   const shopN = items.filter(inSpesa).length + extras.filter(x => x.stato !== 'preso').length;
   $('#shopN').innerHTML = shopN ? `<span class="badge">${shopN}</span>` : '';
   $('#hdr-inv').classList.toggle('hidden', tab !== 'inv');
@@ -538,7 +607,10 @@ function openDetail(id){
     <button class="btn" id="d-ok">Fatto</button>`,
   ov => {
     const shopBtn = () => ov.querySelector('#d-shop').textContent = inSpesa(byId(id)) ? '✓ In lista spesa — togli' : '🛒 Metti in lista spesa';
-    const upd = () => { ov.querySelector('#d-q').textContent = byId(id).qty; shopBtn(); };
+    const upd = () => {
+      const q = ov.querySelector('#d-q'); q.textContent = byId(id).qty;
+      q.classList.remove('jump'); void q.offsetWidth; q.classList.add('jump'); shopBtn();
+    };
     shopBtn();
     ov.querySelector('#d-shop').onclick = () => { toggleSpesa(id); shopBtn(); };
     ov.querySelector('#d-m').onclick = () => { changeQty(id, -1); upd(); };
@@ -631,7 +703,8 @@ function openSettings(){
     ${shareLink ? `<button class="btn sec2" id="s-share">Invia link di configurazione</button><p class="hint">Mandalo ad Alba: aprendolo, URL e token si compilano da soli.</p>` : ''}
     <button class="btn sec2" id="s-csv">Esporta CSV</button>
     <button class="btn sec2" id="s-sync">Sincronizza ora</button>
-    <p class="hint">v${VERSION} · Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>`,
+    <p class="hint">App v${VERSION} · Backend v${esc(srv.version || '?')} · Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>
+    ${srv.version && cmpVersion(srv.version, VERSION) !== 0 ? '<p class="hint" style="color:var(--warn)">Aggiornamento incompleto: pubblica la nuova versione del backend o riapri l\'app.</p>' : ''}`,
   ov => {
     ov.querySelector('#s-save').onclick = () => {
       cfg.user = ov.querySelector('#s-user').value.trim() || cfg.user;
@@ -648,7 +721,27 @@ function openSettings(){
 }
 
 /* ================= SCANNER ================= */
-let qr = null, scanMode = load(LS.mode, 'out'), lastCode = '', lastAt = 0, busy = false;
+let qr = null, scanMode = load(LS.mode, 'out'), busy = false;
+const rd = {code: '', seenAt: 0, at: 0};   // stato anti-doppia-lettura: ultimo codice, ultima callback, ultima operazione
+
+// Doppia lettura (R2.2a): 'process' = opera; 'silent' = stesso codice ancora inquadrato; 'dup' = ripresentato
+// dopo >= 700 ms di assenza ed entro 2,5 s dall'ultima operazione.
+function decideRead(st, code, now){
+  const gap = now - st.seenAt, same = code === st.code;
+  st.code = code; st.seenAt = now;
+  if (same && gap < 700) return 'silent';
+  if (same && now - st.at < 2500) return 'dup';
+  st.at = now; return 'process';
+}
+function scanText(kind, nome, from, to, extra = ''){
+  if (kind === 'dup') return 'Già letto, attendi un attimo';
+  if (kind === 'warn') return `⚠︎ ${nome} · già a 0`;
+  return `${kind === 'in' ? '＋' : '−'} ${nome} · ${from} → ${to}${extra}`;
+}
+// Flash a schermo intero: la classe si toglie e si rimette (reflow) così riparte pulito a ogni lettura
+function flash(kind){
+  const el = $('#flash'); el.className = ''; void el.offsetWidth; el.className = 'go ' + kind;
+}
 
 function setMode(m){
   scanMode = m; save(LS.mode, m);
@@ -658,9 +751,10 @@ function setMode(m){
   });
   scanMsg({out:'Ogni scansione toglie 1', in:'Ogni scansione aggiunge 1', ask:'Inquadra il codice a barre'}[m]);
 }
-function scanMsg(t){ $('#scan-msg').textContent = t; }
+function scanMsg(t, kind = ''){ const m = $('#scan-msg'); m.textContent = t; m.className = ('msg ' + kind).trim(); }
 
 async function openScanner(){
+  scanOpen = true; rd.code = ''; updateSync();
   $('#scan').classList.remove('hidden'); setMode(scanMode); busy = false;
   if (typeof Html5Qrcode === 'undefined') { scanMsg('Scanner non caricato (offline?). Digita il codice.'); return; }
   try {
@@ -677,6 +771,7 @@ async function openScanner(){
 async function closeScanner(){
   try { if (qr && qr.isScanning) await qr.stop(); qr && qr.clear(); } catch(e){}
   qr = null; $('#scan').classList.add('hidden');
+  scanOpen = false; render();
 }
 function pauseScan(){ try { qr && qr.isScanning && qr.pause(true); } catch(e){} }
 function resumeScan(){ busy = false; try { qr && qr.resume(); } catch(e){} }
@@ -694,16 +789,17 @@ function beep(ok = true){
 async function onCode(code){
   code = String(code).trim();
   if (!code || busy) return;
-  const now = Date.now();
-  if (code === lastCode && now - lastAt < 2500) return; // anti-doppia lettura
-  lastCode = code; lastAt = now;
+  const read = decideRead(rd, code, Date.now());
+  if (read === 'silent') return;
+  // conferma visiva prima di qualsiasi await (≤ 50 ms)
+  if (read === 'dup') { flash('dup'); beep(false); scanMsg(scanText('dup'), 'dup'); return; }
   const it = byCode(code);
 
   if (it && scanMode !== 'ask') {
-    const d = scanMode === 'in' ? 1 : -1;
-    if (d < 0 && it.qty <= 0) { beep(false); scanMsg(`⚠︎ ${it.nome}: già a 0`); return; }
-    changeQty(it.id, d); beep();
-    scanMsg(`${d > 0 ? '＋' : '−'} ${it.nome} → ${it.qty}${inSpesa(it) ? '  · in lista spesa' : ''}`);
+    const d = scanMode === 'in' ? 1 : -1, kind = d > 0 ? 'in' : 'out', from = it.qty;
+    if (d < 0 && from <= 0) { flash('warn'); beep(false); scanMsg(scanText('warn', it.nome), 'warn'); return; }
+    flash(kind); changeQty(it.id, d); beep();
+    scanMsg(scanText(kind, it.nome, from, it.qty, d < 0 && inSpesa(it) ? ' · in lista spesa' : ''), kind);
     return;
   }
 
@@ -813,13 +909,14 @@ $('#b-add').onclick = () => openForm(null);
 $('#b-set').onclick = openSettings;
 $('#scan-x').onclick = closeScanner;
 $('#mode').onclick = e => { const b = e.target.closest('[data-m]'); if (b) setMode(b.dataset.m); };
-$('#scan-go').onclick = () => { const v = $('#scan-man').value.trim(); if (v) { $('#scan-man').value = ''; lastCode = ''; onCode(v); } };
+$('#scan-go').onclick = () => { const v = $('#scan-man').value.trim(); if (v) { $('#scan-man').value = ''; rd.code = ''; onCode(v); } };
 $('#scan-man').addEventListener('keydown', e => { if (e.key === 'Enter') $('#scan-go').click(); });
 // il form aperto dallo scanner deve stare sopra lo scanner
 new MutationObserver(() => { $('#sheet-root').style.cssText = $('#sheet-root').innerHTML ? 'position:relative;z-index:40' : ''; })
   .observe($('#sheet-root'), {childList:true});
 document.addEventListener('visibilitychange', () => { if (!document.hidden && cfg) sync(); });
-window.addEventListener('online', () => cfg && sync());
+window.addEventListener('online', () => { updateSync(); cfg && sync(); });
+window.addEventListener('offline', updateSync);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 if (cfg) start(); else initSetup();
