@@ -338,8 +338,8 @@ let tab = 'inv', filter = 'all', query = '';
 let syncing = false, syncErr = '', retryT = 0, scanOpen = false;
 let srv = load(LS.srv, {version: '', config: null});   // ultima versione/config noti del backend
 let lastExp = load(LS.lastExp, {});                     // id prodotto → ultima data scelta (max 200)
-let inherit = null, lp = null, pickerUntil = 0;         // lotto ereditato {id,d,at}; pannello Scadenza? {id,n,host,sheet,t}; selettore data nativo aperto fino a…
-const QUICK_DAYS = [7, 30], PICK_MS = 20000, INHERIT_MS = 90000, LASTEXP_MAX = 200;
+let lp = null, pickerUntil = 0;                         // pannello Scadenza? {id,n,host,sheet}; selettore data nativo aperto fino a…
+const QUICK_DAYS = [7, 30], PICK_MS = 20000, LASTEXP_MAX = 200;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -486,7 +486,7 @@ function changeQty(id, delta, lot){
   hl(id, delta);
   return it;
 }
-/* ---- lotti: pannello Scadenza? (R1.9), lotto ereditato, spostamenti ---- */
+/* ---- lotti: pannello Scadenza? (R1.9), spostamenti ---- */
 const isoDay = off => { const d = new Date(); d.setDate(d.getDate() + off); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 function rememberExp(id, d){
   if (!d) return;
@@ -502,16 +502,12 @@ function moveLot(it, from, to, q){
   queue({op:'lotMove', id: it.id, from: isoOrEmpty(from), to: isoOrEmpty(to), q});
 }
 // + di una unità (scanner in modalità Carica, tasto + in lista o scheda). Prodotto con scadenza attiva: unità subito
-// registrata senza data, poi pannello. Solo per le scansioni (viaScan): se c'è un lotto ereditato (stessa scelta, stesso
-// prodotto, <90 s) l'unità va lì senza pannello. Dai tasti + il lotto si chiede sempre.
-function plusOne(id, viaScan){
+// registrata senza data, poi pannello che chiede sempre il lotto (con più unità il contatore le sposta tutte con una scelta).
+function plusOne(id){
   const it = byId(id); if (!it) return;
-  if (inherit && inherit.id !== id) inherit = null;
   if (lp && lp.id !== id) lotClose();
-  const tracked = isTracked(it);
-  if (tracked && viaScan && inherit && Date.now() - inherit.at < INHERIT_MS) { changeQty(id, 1, inherit.d); plusOne.date = inherit.d; return it; }
-  changeQty(id, 1); plusOne.date = null;
-  if (tracked) lotPrompt(it);
+  changeQty(id, 1);
+  if (isTracked(it)) lotPrompt(it);
   return it;
 }
 function lotPrompt(it){
@@ -549,7 +545,6 @@ function lotChoose(d){
   if (!it || !isTracked(it)) return;
   d = isoOrEmpty(d);
   if (d) { moveLot(it, '', d, n); rememberExp(it.id, d); }
-  inherit = {id: it.id, d, at: Date.now()};
   const t = `${it.nome} ×${n} · ${d ? 'scade ' + fmtDM(d) : 'senza data'}`;
   if (scanOpen) scanMsg(t, 'in'); else toast(t);
 }
@@ -999,8 +994,7 @@ async function onCode(code){
     const d = scanMode === 'in' ? 1 : -1, kind = d > 0 ? 'in' : 'out', from = it.qty;
     if (d < 0 && from <= 0) { flash('warn'); beep(false); scanMsg(scanText('warn', it.nome), 'warn'); return; }
     flash(kind);
-    if (d > 0) { plusOne(it.id, true); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, plusOne.date === null ? '' : plusOne.date ? ` · scade ${fmtDM(plusOne.date)}` : ' · senza data'), kind); return; }
-    if (inherit && inherit.id !== it.id) inherit = null;
+    if (d > 0) { plusOne(it.id); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, isTracked(it) ? ' · scegli la scadenza' : ''), kind); return; }
     const tr = isTracked(it); changeQty(it.id, d); beep();
     let x = '';
     if (tr) {   // R1.10: data del lotto consumato e, se diverso, il prossimo

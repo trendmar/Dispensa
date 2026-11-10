@@ -203,24 +203,22 @@ t('6 unità dello stesso prodotto prima della scelta → un solo lotMove con q =
   eq(lotsOf(p1(h)), [{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 3 }, { d: '2026-12-01', q: 6 }].sort((a, b) => a.d < b.d ? -1 : 1));
   assert.strictEqual(p1(h).qty, 10); assert.strictEqual(h.app.lp, null); eq(h.app.lastExp.p1, '2026-12-01');
 });
-t('scelta dopo la prima unità: le successive vanno nel lotto scelto (delta con lot, nessun pannello) per 90 s', async () => {
+t('ogni carico chiede il lotto: dopo una scelta la scansione successiva dello stesso prodotto riapre il pannello (delta senza lot)', async () => {
   const h = await mkT(); h.app.openScanner();
   await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); h.advance(3000);
   await h.app.onCode('123');
-  eq(ops(h).map(o => [o.op, 'lot' in o ? o.lot : undefined]), [['delta', undefined], ['lotMove', undefined], ['delta', '2026-12-01']]);
-  assert.strictEqual(h.app.lp, null); assert.strictEqual(msg(h), '＋ Yogurt greco · 5 → 6 · scade 01/12');
-  h.advance(91000); await h.app.onCode('123');
-  assert.strictEqual(h.app.lp && h.app.lp.n, 1); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
+  eq(ops(h).map(o => [o.op, 'lot' in o]), [['delta', false], ['lotMove', false], ['delta', false]]);
+  assert.ok(h.app.lp && h.app.lp.id === 'p1' && h.app.lp.n === 1, 'il pannello ricompare'); assert.ok(msg(h).includes('scegli la scadenza'), msg(h));
 });
-t('"Senza data" è una scelta esplicita: nessun lotMove, ma le unità successive seguono (lot vuoto)', async () => {
+t('"Senza data": nessun lotMove e la scansione successiva chiede di nuovo', async () => {
   const h = await mkT(); h.app.openScanner();
   await h.app.onCode('123'); h.app.lotChoose(''); h.advance(3000); await h.app.onCode('123');
-  eq(ops(h).map(o => o.op), ['delta', 'delta']); assert.strictEqual(ops(h)[1].lot, ''); assert.strictEqual(h.app.lp, null);
+  eq(ops(h).map(o => o.op), ['delta', 'delta']); assert.strictEqual('lot' in ops(h)[1], false); assert.ok(h.app.lp);
 });
 t('pannello persistente: resta aperto finché non si sceglie o si tocca ✕; ✕ lascia le unità senza data; un altro prodotto lo sostituisce', async () => {
   const h = await mkT(); h.app.openScanner();
   await h.app.onCode('123'); h.advance(120000); assert.ok(h.app.lp, 'nessun timeout'); assert.strictEqual(h.app.lp.n, 1);
-  h.app.lotClose(); assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.inherit, null);
+  h.app.lotClose(); assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta']); 
   h.advance(3000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1);
   h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2'); assert.strictEqual(h.app.lp.n, 1);
   assert.ok(!ops(h).some(o => o.op === 'lotMove'));
@@ -231,7 +229,7 @@ t('pannello: propone i lotti esistenti come scelte, più nuova data, e un pulsan
   assert.ok(html.includes('data-d="2026-11-12"') && html.includes('12/11 · ×1') && html.includes('data-d="2026-11-20"') && html.includes('20/11 · ×3'), html);
   assert.ok(html.includes('+7 g') && html.includes('+30 g') && html.includes('Scegli') && html.includes('Senza data') && html.includes('data-lpx'), html);
 });
-t('tasto + (lista/scheda): chiede il lotto ogni volta, senza lotto ereditato; il contatore somma e una sola scelta sposta tutto', async () => {
+t('tasto + (lista/scheda): chiede il lotto ogni volta; il contatore somma e una sola scelta sposta tutto', async () => {
   const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); h.app.closeScanner(); await h.flush();
   h.advance(3000); h.app.plusOne('p1');
   assert.ok(h.app.lp && h.app.lp.n === 1, 'chiede di nuovo il lotto'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
@@ -280,14 +278,6 @@ t('scheda, form, Impostazioni e filtro "Da datare" con prodotti tracciati: HTML 
   const old = await mk({ fetchImpl: async () => ({ json: async () => ({ ok: true, version: '1.1', items: ITEMS(), extras: [] }) }), ls: { 'disp.cfg': CFG, 'disp.items': ITEMS(), 'disp.srv': { version: '1.1', config: null } } });
   old.app.openSettings(); assert.ok(!old.el('#sheet-root').rec.innerHTML.includes('Scadenze per categoria'));
   old.app.openDetail('p1'); assert.ok(!old.el('#sheet-root').rec.innerHTML.includes('d-lots'));
-});
-
-t('lotto ereditato: un altro prodotto in mezzo lo annulla, lo stesso codice richiede di nuovo la data', async () => {
-  const h = await mkT(); h.app.openScanner();
-  await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); assert.ok(h.app.inherit);
-  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.inherit, null); h.app.lotChoose('');
-  h.advance(3000); await h.app.onCode('123');
-  assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
 });
 
 t('selettore data aperto: il pannello resta e le letture sono ignorate per 20 s; poi lo scanner torna libero', async () => {

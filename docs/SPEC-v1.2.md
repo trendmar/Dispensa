@@ -149,7 +149,7 @@ Per i prodotti **senza** scadenza attiva ogni operazione si comporta esattamente
 - L'unità è **già registrata** al momento del tocco o della scansione, nel lotto senza data (`delta` senza `lot`). Il pannello tiene un contatore `n` delle unità dello **stesso prodotto** caricate da quando è comparso, e **azzera il timer a ogni scansione**. Ogni scelta invia **un solo** `lotMove` con `q = n` dal lotto senza data al lotto scelto.
 - Scelte rapide: **[Stessa: gg/mm]** (ultima data usata per quel prodotto, in `localStorage` con chiave `disp.lastExp`, al massimo 200 prodotti; se manca, la data più alta tra i lotti), **[+7 g]**, **[+30 g]** (costante `QUICK_DAYS`), **[📅 Scegli]** (selettore nativo), **[Senza data]**.
 - **Resta aperto finché l'utente non sceglie o tocca ✕** (rev. dopo la prova su iPhone: il timeout di 8 s era troppo breve e distruggeva il selettore data); chiudendo con ✕ le unità restano senza data e nessuna scelta viene registrata. Offre come scelte i lotti esistenti (data · ×q), le date rapide, il selettore e "Senza data". Una scansione di un **altro** prodotto lo sostituisce. Per 20 s dal tocco su **📅 Scegli** `onCode` ignora le letture (iOS non invia focus/blur sul campo data). Chiudere la scheda prodotto chiude il pannello.
-- **Lotto ereditato (solo scansioni dello scanner):** dopo una scelta **esplicita** (inclusa "Senza data"), se lo **stesso** codice viene scansionato di nuovo entro 90 s senza altri prodotti in mezzo, la nuova unità va direttamente in quel lotto (`delta` con `lot`), senza pannello; il messaggio riporta la data. I tasti **+** in lista e scheda chiedono sempre il lotto. Se il pannello è stato chiuso con ✕, ricompare alla scansione successiva.
+- **Nessun lotto ereditato (rev. dopo la prova su iPhone):** ogni carico di un prodotto con scadenza attiva, da scanner o da tasto +, chiede il lotto. Se il pannello è già aperto per quel prodotto il contatore `n` sale e una sola scelta sposta tutte le unità; dopo una scelta o una chiusura con ✕, il carico successivo lo riapre. Il messaggio dello scanner è `＋ Nome · 3 → 4 · scegli la scadenza`.
 - Non mette in pausa la fotocamera. Nella modalità **Chiedi** (apre la scheda prodotto) il pannello non compare: i lotti si gestiscono dalla scheda (R1.11).
 
 **R1.10 (P0): consumo (− Usa).** Nessun tap in più. Messaggio: `− Yogurt greco · 4 → 3 · scade 12/11`, dove la data è quella del lotto consumato; se il prossimo lotto è diverso, accodare ` · poi 20/11`.
@@ -359,7 +359,7 @@ Tolte rispetto alla bozza 1.0: annulla ultima operazione (non ripristina lo stat
 | Unità | Logica dei lotti (Appendice B); `norm`, `matchProduct`, `desired`, `alexaSync` (non devono cambiare) | Node, senza dipendenze |
 | Backend | `applyOp`, `openDb`/`saveDb` su foglio finto; test golden (6.5); compatibilità 1.1 incluso `upsert` con campi vecchi; idempotenza | Node con `vm` |
 | Integrazione | Due client simulati con sequenze interallacciate; risposta persa e rinvio con `opId` | Node |
-| Interfaccia | Scenari R1 e R2: doppia lettura, 6 unità, `prefers-reduced-motion`, pannello, lotto ereditato, selettore data | Playwright se disponibile, altrimenti checklist manuale |
+| Interfaccia | Scenari R1 e R2: doppia lettura, 6 unità, `prefers-reduced-motion`, pannello, selettore data | Playwright se disponibile, altrimenti checklist manuale |
 | Dispositivo | Flash, pannello, modalità silenziosa, rete assente | Mario su iPhone |
 
 ### 8.3 Definition of Done
