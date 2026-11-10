@@ -117,6 +117,20 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 #scan .msg.out{color:#f2827a}
 #scan .msg.warn{color:#f0a35c}
 #scan .msg.dup{color:#9aa19d}
+/* pannello Scadenza? (R1.9): nello scanner è assoluto sopra .foot, fuori dal flusso flex; altrove è #lotbar fisso */
+#lotpanel,#lotbar{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+#lotpanel{position:absolute;left:10px;right:10px;bottom:calc(84px + var(--safe-b));z-index:6}
+#lotbar{position:fixed;left:10px;right:10px;bottom:calc(84px + var(--safe-b));z-index:45}
+.lp-h{font-size:14px;margin-bottom:8px}
+.lp-r{display:flex;gap:6px;flex-wrap:wrap}
+.lp-b{padding:9px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font-size:14px;font-weight:600;color:var(--ink)}
+.lp-b:active{background:var(--line)}
+.lp-pick{position:relative;overflow:hidden;display:inline-block;margin:0}
+.lp-date{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+.lot{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 8px;margin-bottom:6px}
+.lot-d{flex:1;font-size:15px}
+.lot-ed{position:relative;overflow:hidden;width:38px;height:38px;border-radius:10px;background:var(--bg);display:grid;place-items:center;margin:0;font-size:18px}
+.lot-ed input{position:absolute;inset:0;width:100%;height:100%;opacity:0}
 .scan-sync{font-size:13px;color:#ccc;min-width:48px;text-align:right;white-space:nowrap}
 #flash{position:absolute;inset:0;z-index:5;pointer-events:none;opacity:0;display:grid;place-items:center;font-size:96px;font-weight:700;color:rgba(255,255,255,.95)}
 #flash.go{animation:flashgo .35s ease-out}
@@ -207,6 +221,7 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
   <div id="reader"></div>
   <div id="flash"></div>
   <div class="msg" id="scan-msg" aria-live="polite">Inquadra il codice a barre</div>
+  <div id="lotpanel" class="hidden"></div>
   <div class="foot">
     <input id="scan-man" inputmode="numeric" placeholder="…o digita il codice">
     <button id="scan-go">OK</button>
@@ -214,12 +229,13 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 </div>
 
 <div id="sheet-root"></div>
+<div id="lotbar" class="hidden"></div>
 <div id="toast"></div>
 
 <script>
 /* ================= CONFIG / STATO ================= */
 const VERSION = '1.2.0';
-const LS = {cfg:'disp.cfg', items:'disp.items', extras:'disp.extras', pend:'disp.pend', mode:'disp.mode', srv:'disp.srv'};
+const LS = {cfg:'disp.cfg', items:'disp.items', extras:'disp.extras', pend:'disp.pend', mode:'disp.mode', srv:'disp.srv', lastExp:'disp.lastExp'};
 const DEF_POS = ['Dispensa','Frigo','Freezer','Cantina'];
 const DEF_CAT = ['Pasta e riso','Conserve','Sughi e condimenti','Colazione','Snack e dolci','Bevande',
   'Latticini','Carne e pesce','Frutta e verdura','Surgelati','Bimbi','Casa e pulizia','Altro'];
@@ -318,6 +334,9 @@ let extras = load(LS.extras, []);
 let tab = 'inv', filter = 'all', query = '';
 let syncing = false, syncErr = '', retryT = 0, scanOpen = false;
 let srv = load(LS.srv, {version: '', config: null});   // ultima versione/config noti del backend
+let lastExp = load(LS.lastExp, {});                     // id prodotto → ultima data scelta (max 200)
+let inherit = null, lp = null, pickerOpen = false;      // lotto ereditato {id,d,at}; pannello Scadenza? {id,n,host,sheet,t}
+const QUICK_DAYS = [7, 30], LP_MS = 8000, INHERIT_MS = 90000, LASTEXP_MAX = 200;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -392,8 +411,9 @@ async function sync(){
     const batch = pending.slice();
     const r = batch.length ? await apiPost(batch) : await apiGet();
     if (!r.ok) throw new Error(r.error);
-    noteSrv(r);
     pending = pending.slice(batch.length); save(LS.pend, pending);
+    // con operazioni ancora in coda (es. un cfgSet) la config locale vale più di quella appena letta
+    noteSrv(pending.length ? Object.assign({}, r, {config: srv.config || r.config}) : r);
     if (!pending.length) { items = r.items; extras = r.extras || []; save(LS.items, items); save(LS.extras, extras); }
     syncErr = '';
   } catch(e) {
@@ -424,30 +444,118 @@ function daysTo(d){
   const t = new Date(d + 'T00:00:00'); const n = new Date(); n.setHours(0,0,0,0);
   return Math.round((t - n) / 864e5);
 }
+// R1.15: funzioni dei lotti solo con backend >= 1.2 (confronto numerico) E oggetto config; catScad vuoto non le spegne
+const lotsEnabled = () => cmpVersion(srv.version, '1.2') >= 0 && !!srv.config;
+const isTracked = it => lotsEnabled() && Array.isArray(srv.config.catScad) && srv.config.catScad.includes(it.categoria);
+// R1.13: prossima scadenza (tra i lotti effettivi se la categoria è attiva, altrimenti il campo scadenza)
+const expiry = it => isTracked(it) ? nextExpiry(effectiveLots(it)) : (it.scadenza || '');
 function expTag(it){
-  const d = daysTo(it.scadenza); if (d === null || it.qty <= 0) return '';
-  if (d < 0) return `<span class="tag b">scaduto</span>`;
-  if (d === 0) return `<span class="tag b">scade oggi</span>`;
-  if (d <= SOON_DAYS) return `<span class="tag w">scade tra ${d} gg</span>`;
-  return `<span class="tag">${fmtDate(it.scadenza)}</span>`;
+  const e = expiry(it), d = daysTo(e); if (d === null || it.qty <= 0) return '';
+  let x = '';
+  if (isTracked(it)) { const lots = effectiveLots(it), f = sorted(lots).find(l => l.d); if (f && f.q < total(lots)) x = ` · ×${f.q}`; }
+  if (d < 0) return `<span class="tag b">scaduto${x}</span>`;
+  if (d === 0) return `<span class="tag b">scade oggi${x}</span>`;
+  if (d <= SOON_DAYS) return `<span class="tag w">scade tra ${d} gg${x}</span>`;
+  return `<span class="tag">${fmtDate(e)}${x}</span>`;
 }
 const fmtDate = d => d ? d.split('-').reverse().slice(0,2).join('/') + '/' + d.slice(2,4) : '';
-const isSoon = it => { const d = daysTo(it.scadenza); return d !== null && d <= SOON_DAYS && it.qty > 0; };
+const fmtDM = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
+const isSoon = it => { const d = daysTo(expiry(it)); return d !== null && d <= SOON_DAYS && it.qty > 0; };
+// P1 "Da datare": solo prodotti con lotti già scritti nel foglio che contengono un lotto senza data
+const needsDate = it => isTracked(it) && parseLots(it.lotti).some(l => l.d === '' && l.q > 0);
 const isLow = it => it.scortaMin > 0 && it.qty < it.scortaMin;
 const inLista = it => isLow(it) || it.stato === 'comprare' || it.stato === 'preso'; // visibile in Spesa
 const inSpesa = it => inLista(it) && it.stato !== 'preso';                          // ancora da comprare
 const byId = id => items.find(i => i.id === id);
 const byCode = c => items.find(i => i.barcode && String(i.barcode) === String(c));
 
-function changeQty(id, delta){
+// lot: solo per prodotti con scadenza attiva (carico nel lotto / consumo da quel lotto); changeQty.taken = lotti consumati
+function changeQty(id, delta, lot){
   const it = byId(id); if (!it) return;
   if (it.qty + delta < 0) return;
-  it.qty += delta;
+  const tracked = isTracked(it); changeQty.taken = [];
+  if (tracked) { const r = applyDelta(it, delta, lot); Object.assign(it, r.item); changeQty.taken = r.taken; }
+  else it.qty += delta;
   if (delta > 0) it.stato = '';
-  queue({op:'delta', id, delta});
+  const op = {op:'delta', id, delta}; if (tracked && lot !== undefined) op.lot = lot;
+  if (delta < 0 && lp && lp.id === id) lotClose();
+  queue(op);
   hl(id, delta);
   return it;
 }
+/* ---- lotti: pannello Scadenza? (R1.9), lotto ereditato, spostamenti ---- */
+const isoDay = off => { const d = new Date(); d.setDate(d.getDate() + off); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+function rememberExp(id, d){
+  if (!d) return;
+  delete lastExp[id]; lastExp[id] = d;
+  const k = Object.keys(lastExp); k.slice(0, Math.max(0, k.length - LASTEXP_MAX)).forEach(x => delete lastExp[x]);
+  save(LS.lastExp, lastExp);
+}
+// sposta q unità da un lotto a un altro: ottimistico in locale + operazione lotMove (mai con gating spento)
+function moveLot(it, from, to, q){
+  if (!isTracked(it) || !(q > 0)) return;
+  const lots = moveUnits(effectiveLots(it), from, to, q);
+  it.lotti = serializeLots(lots); it.scadenza = nextExpiry(lots);
+  queue({op:'lotMove', id: it.id, from: isoOrEmpty(from), to: isoOrEmpty(to), q});
+}
+// + di una unità (scanner in modalità Carica, tasto + in lista o scheda). Prodotto con scadenza attiva: unità subito
+// registrata senza data, poi pannello; se c'è un lotto ereditato (stessa scelta, stesso prodotto, <90 s) va lì senza pannello.
+function plusOne(id){
+  const it = byId(id); if (!it) return;
+  if (inherit && inherit.id !== id) inherit = null;
+  if (lp && lp.id !== id) lotClose();
+  const tracked = isTracked(it);
+  if (tracked && inherit && Date.now() - inherit.at < INHERIT_MS) { changeQty(id, 1, inherit.d); plusOne.date = inherit.d; return it; }
+  changeQty(id, 1); plusOne.date = null;
+  if (tracked) lotPrompt(it);
+  return it;
+}
+function lotPrompt(it){
+  const host = $('#sheet-root').innerHTML ? 'bar' : (scanOpen ? 'panel' : 'bar');
+  if (lp && lp.id === it.id && lp.host === host) lp.n++;
+  else { lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML, t: 0}; }
+  lotRender(); lotTimer();
+}
+const lotHost = () => $(lp.host === 'panel' ? '#lotpanel' : '#lotbar');
+function lotRender(){
+  const it = byId(lp.id), lots = effectiveLots(it);
+  const same = lastExp[it.id] || lots.reduce((m, l) => (l.d > m ? l.d : m), '');
+  const b = (d, t) => `<button class="lp-b" data-lp data-d="${d}">${t}</button>`;
+  const el = lotHost();
+  el.innerHTML = `<div class="lp-h"><b>Scadenza?</b> ${esc(it.nome)} ×${lp.n}</div><div class="lp-r">`
+    + (same ? b(same, 'Stessa: ' + fmtDM(same)) : '')
+    + QUICK_DAYS.map(n => b(isoDay(n), `+${n} g`)).join('')
+    + `<label class="lp-b lp-pick">📅 Scegli<input type="date" class="lp-date"></label>` + b('', 'Senza data') + '</div>';
+  el.classList.remove('hidden');
+}
+// si chiude da solo dopo 8 s senza scansioni né tocchi: le unità restano senza data, nessuna scelta registrata
+function lotTimer(){
+  clearTimeout(lp.t);
+  lp.t = setTimeout(() => { if (!lp) return; if (pickerOpen) lotTimer(); else lotClose(); }, LP_MS);
+}
+function lotClose(){
+  if (!lp) return;
+  clearTimeout(lp.t); const el = lotHost(); el.innerHTML = ''; el.classList.add('hidden'); lp = null; pickerOpen = false;
+}
+// una sola operazione per scelta: lotMove con q = unità caricate da quando è comparso il pannello
+function lotChoose(d){
+  if (!lp) return;
+  const it = byId(lp.id), n = lp.n; lotClose();
+  if (!it || !isTracked(it)) return;
+  d = isoOrEmpty(d);
+  if (d) { moveLot(it, '', d, n); rememberExp(it.id, d); }
+  inherit = {id: it.id, d, at: Date.now()};
+  const t = `${it.nome} ×${n} · ${d ? 'scade ' + fmtDM(d) : 'senza data'}`;
+  if (scanOpen) scanMsg(t, 'in'); else toast(t);
+}
+[$('#lotpanel'), $('#lotbar')].forEach(h => {
+  const isDate = e => e.target.classList && e.target.classList.contains('lp-date');
+  h.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-lp]'); if (b) lotChoose(b.dataset.d); });
+  h.addEventListener('pointerdown', () => { if (lp) lotTimer(); });
+  h.addEventListener('focusin', e => { if (isDate(e)) pickerOpen = true; });
+  h.addEventListener('focusout', e => { if (isDate(e)) { pickerOpen = false; if (lp) lotTimer(); } });
+  h.addEventListener('change', e => { if (isDate(e)) { pickerOpen = false; lotChoose(e.target.value); } });
+});
 // R2.4: evidenzia per 300 ms la riga (e il numero) appena cambiata
 function hl(id, delta){
   const c = delta > 0 ? 'pl-in' : 'pl-out';
@@ -460,11 +568,22 @@ function hl(id, delta){
 function upsert(it, qtyDelta){
   const i = items.findIndex(x => x.id === it.id);
   if (i >= 0) {
-    it.qty = Math.max(0, items[i].qty + (qtyDelta || 0));
-    it.stato = qtyDelta > 0 ? '' : (items[i].stato || '');
+    const old = items[i];
+    if (isTracked(it)) {   // scadenza attiva (categoria dopo l'operazione): lotti e scadenza derivati, mai presi dal form; delta 0 = tocco
+      const r = applyDelta(old, qtyDelta || 0).item;
+      it.qty = r.qty; it.lotti = r.lotti; it.scadenza = r.scadenza;
+    } else it.qty = Math.max(0, old.qty + (qtyDelta || 0));
+    it.stato = qtyDelta > 0 ? '' : (old.stato || '');
     items[i] = it;
     queue({op:'upsert', item: it, qtyDelta: qtyDelta || 0});
   } else { it.stato = ''; items.push(it); queue({op:'upsert', item: it}); }
+}
+// R1.14: applica subito in locale e invia cfgSet (ultima scrittura vince); con gating spento non fa nulla
+function setCatScad(list){
+  if (!lotsEnabled()) return;
+  list = [...new Set(list.map(s => String(s).trim()).filter(Boolean))];
+  srv = Object.assign({}, srv, {config: Object.assign({}, srv.config, {catScad: list})}); save(LS.srv, srv);
+  queue({op:'cfgSet', key:'catScad', value: list});
 }
 function setStato(id, stato){ const it = byId(id); if (!it) return; it.stato = stato; queue({op:'stato', id, stato}); }
 function toggleSpesa(id){
@@ -505,14 +624,18 @@ function render(){
 }
 function renderInv(){
   const soonN = items.filter(isSoon).length;
+  const undN = items.filter(needsDate).length;
+  if (filter === 'undated' && !undN) filter = 'all';
   const chips = [['all','Tutti', items.filter(i=>i.qty>0).length], ['soon','In scadenza', soonN], ['low','Da comprare', items.filter(inSpesa).length]]
+    .concat(undN ? [['undated','Da datare', undN]] : [])
     .concat(positions().map(p => ['pos:' + p, p, items.filter(i => i.posizione === p && i.qty > 0).length]))
     .concat([['zero','Esauriti', items.filter(i=>i.qty<=0).length]]);
   $('#chips').innerHTML = chips.map(([k,l,n]) => `<button class="chip ${filter===k?'on':''}" data-f="${k}">${esc(l)}<span class="n">${n}</span></button>`).join('');
 
   const q = query.toLowerCase();
   let list = items.filter(it => !q || [it.nome, it.marca, it.categoria, it.posizione, it.barcode].join(' ').toLowerCase().includes(q));
-  if (filter === 'soon') list = list.filter(isSoon).sort((a,b) => a.scadenza.localeCompare(b.scadenza));
+  if (filter === 'soon') list = list.filter(isSoon).sort((a,b) => expiry(a).localeCompare(expiry(b)));
+  else if (filter === 'undated') list = list.filter(needsDate);
   else if (filter === 'low') list = list.filter(inSpesa);
   else if (filter === 'zero') list = list.filter(i => i.qty <= 0);
   else if (filter.startsWith('pos:')) list = list.filter(i => i.posizione === filter.slice(4));
@@ -582,7 +705,7 @@ function openSheet(html, onMount){
   ov.addEventListener('click', e => { if (e.target === ov) closeSheet(); });
   onMount && onMount(ov);
 }
-function closeSheet(){ $('#sheet-root').innerHTML = ''; if (closeSheet.after) { const f = closeSheet.after; closeSheet.after = null; f(); } }
+function closeSheet(){ if (lp && lp.sheet) lotClose(); $('#sheet-root').innerHTML = ''; if (closeSheet.after) { const f = closeSheet.after; closeSheet.after = null; f(); } }
 
 function openDetail(id){
   const it = byId(id); if (!it) return;
@@ -596,25 +719,56 @@ function openDetail(id){
     </div>
     <div class="facts">
       <div class="fact"><span>Posizione</span>${esc(it.posizione||'—')}</div>
-      <div class="fact"><span>Scadenza</span>${it.scadenza ? fmtDate(it.scadenza) : '—'} ${expTag(it)}</div>
+      <div class="fact" id="d-exp"><span>${isTracked(it) ? 'Prossima scadenza' : 'Scadenza'}</span>${expiry(it) ? fmtDate(expiry(it)) : '—'} ${expTag(it)}</div>
       <div class="fact"><span>Scorta minima</span>${it.scortaMin || '—'}</div>
       <div class="fact"><span>Categoria</span>${esc(it.categoria||'—')}</div>
       ${it.note ? `<div class="fact" style="grid-column:1/-1"><span>Note</span>${esc(it.note)}</div>` : ''}
       ${it.updatedBy ? `<div class="hint" style="grid-column:1/-1">Ultima modifica: ${esc(it.updatedBy)} ${it.updated ? '· ' + new Date(it.updated).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}</div>` : ''}
     </div>
+    ${isTracked(it) ? '<div class="sec" style="margin-top:14px">Lotti</div><div id="d-lots"></div>' : ''}
     <button class="btn sec2" id="d-shop"></button>
     <button class="btn sec2" id="d-edit">Modifica</button>
     <button class="btn" id="d-ok">Fatto</button>`,
   ov => {
     const shopBtn = () => ov.querySelector('#d-shop').textContent = inSpesa(byId(id)) ? '✓ In lista spesa — togli' : '🛒 Metti in lista spesa';
-    const upd = () => {
-      const q = ov.querySelector('#d-q'); q.textContent = byId(id).qty;
-      q.classList.remove('jump'); void q.offsetWidth; q.classList.add('jump'); shopBtn();
+    // R1.11: una riga per lotto con data, quantità, cambio data (lotMove) e −/+ propri (delta con lot)
+    const lotsView = () => {
+      const box = ov.querySelector('#d-lots'); if (!box) return;
+      const lots = effectiveLots(byId(id));
+      box.innerHTML = (lots.length ? lots.map(l => `<div class="lot" data-d="${l.d}">
+          <span class="lot-d">${l.d ? fmtDate(l.d) : 'senza data'} ×${l.q}</span>
+          <label class="lot-ed" title="Cambia data">📅<input type="date" data-from="${l.d}" data-q="${l.q}"></label>
+          <button class="qb" data-ld="-1">−</button><button class="qb" data-ld="1">+</button></div>`).join('') : '<div class="hint">Nessun lotto</div>')
+        + `<button class="btn sec2" id="la-open">＋ Aggiungi lotto</button>
+        <div id="la" class="hidden"><div class="two"><div><label>Scadenza</label><input class="in" type="date" id="la-d"></div>
+        <div><label>Quantità</label><input class="in" type="number" inputmode="numeric" min="1" value="1" id="la-q"></div></div>
+        <button class="btn" id="la-ok">Aggiungi</button></div>`;
     };
-    shopBtn();
+    const upd = () => {
+      const it = byId(id), q = ov.querySelector('#d-q'); q.textContent = it.qty;
+      q.classList.remove('jump'); void q.offsetWidth; q.classList.add('jump'); shopBtn(); lotsView();
+      const ex = ov.querySelector('#d-exp'); if (ex) ex.innerHTML = `<span>${isTracked(it) ? 'Prossima scadenza' : 'Scadenza'}</span>${expiry(it) ? fmtDate(expiry(it)) : '—'} ${expTag(it)}`;
+    };
+    shopBtn(); lotsView();
+    const box = ov.querySelector('#d-lots');
+    if (box) {
+      box.addEventListener('click', e => {
+        const b = e.target.closest('[data-ld]'), lot = e.target.closest('.lot');
+        if (b && lot) { changeQty(id, +b.dataset.ld, lot.dataset.d); return upd(); }
+        if (e.target.closest('#la-open')) return ov.querySelector('#la').classList.toggle('hidden');
+        if (e.target.closest('#la-ok')) {
+          const q = Math.max(1, parseInt(ov.querySelector('#la-q').value) || 1);
+          changeQty(id, q, isoOrEmpty(ov.querySelector('#la-d').value)); upd();
+        }
+      });
+      box.addEventListener('change', e => {
+        const f = e.target.dataset && e.target.dataset.from;
+        if (f !== undefined) { moveLot(byId(id), f, isoOrEmpty(e.target.value), +e.target.dataset.q); upd(); }
+      });
+    }
     ov.querySelector('#d-shop').onclick = () => { toggleSpesa(id); shopBtn(); };
     ov.querySelector('#d-m').onclick = () => { changeQty(id, -1); upd(); };
-    ov.querySelector('#d-p').onclick = () => { changeQty(id, 1); upd(); };
+    ov.querySelector('#d-p').onclick = () => { plusOne(id); upd(); };
     ov.querySelector('#d-edit').onclick = () => openForm(byId(id));
     ov.querySelector('#d-ok').onclick = closeSheet;
   });
@@ -626,6 +780,7 @@ function openForm(it, prefill){
   it = it ? {...it} : {id: uid(), nome:'', marca:'', formato:'', categoria:'Altro', posizione: positions()[0], qty:1, scortaMin:1, scadenza:'', note:'', img:'', barcode:'', ...prefill};
   const cats = DEF_CAT.includes(it.categoria) || !it.categoria ? DEF_CAT : [it.categoria, ...DEF_CAT];
   const poss = positions().includes(it.posizione) || !it.posizione ? positions() : [...positions(), it.posizione];
+  const roExp = !isNew && isTracked(it);   // R1.12: prodotto esistente con scadenza attiva → riga di sola lettura
   openSheet(`
     <div class="sh-h">${it.img ? thumb(it) : ''}<h2>${isNew ? 'Nuovo prodotto' : 'Modifica'}</h2></div>
     ${prefill?.offMsg ? `<p class="hint" style="margin-top:-4px">${esc(prefill.offMsg)}</p>` : ''}
@@ -641,7 +796,8 @@ function openForm(it, prefill){
     <label>Posizione</label>
     <div class="chips" id="f-pos" style="padding-top:0">${poss.map(p => `<button type="button" class="chip ${p===it.posizione?'on':''}" data-p="${esc(p)}">${esc(p)}</button>`).join('')}</div>
     <div class="two">
-      <div><label>Scadenza</label><input class="in" id="f-scad" type="date" value="${esc(it.scadenza)}"></div>
+      <div><div id="f-scad-wrap" class="${roExp ? 'hidden' : ''}"><label>Scadenza</label><input class="in" id="f-scad" type="date" value="${esc(it.scadenza)}"></div>
+        ${isNew ? '' : `<div id="f-scad-ro" class="${roExp ? '' : 'hidden'}"><label>Prossima scadenza</label><div class="fact" style="margin:0">${expiry(it) ? fmtDate(expiry(it)) : '—'}, ${effectiveLots(it).length} ${effectiveLots(it).length === 1 ? 'lotto' : 'lotti'}</div><p class="hint">Gestisci i lotti nella scheda.</p></div>`}</div>
       <div><label>Categoria</label><select class="in" id="f-cat">${cats.map(c => `<option ${c===it.categoria?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
     </div>
     <details ${it.marca || it.note ? 'open' : ''}><summary>Altri dettagli</summary>
@@ -656,6 +812,12 @@ function openForm(it, prefill){
     ${isNew ? '' : '<button class="btn del" id="f-del">Elimina prodotto</button>'}`,
   ov => {
     let pos = it.posizione;
+    // cambiare categoria nel form non tocca i lotti: cambia solo se mostrare il campo Scadenza o la riga di sola lettura
+    const syncExp = () => {
+      const ro = !isNew && isTracked({categoria: ov.querySelector('#f-cat').value});
+      ov.querySelector('#f-scad-wrap').classList.toggle('hidden', ro); ov.querySelector('#f-scad-ro').classList.toggle('hidden', !ro);
+    };
+    if (!isNew) ov.querySelector('#f-cat').onchange = syncExp;
     ov.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
       const inp = ov.querySelector('#' + b.dataset.s); inp.value = Math.max(0, (parseInt(inp.value)||0) + +b.dataset.d);
     });
@@ -672,7 +834,7 @@ function openForm(it, prefill){
       const out = {...it, nome, posizione: pos,
         qty: Math.max(0, parseInt(ov.querySelector('#f-qty').value) || 0),
         scortaMin: Math.max(0, parseInt(ov.querySelector('#f-min').value) || 0),
-        scadenza: ov.querySelector('#f-scad').value || '',
+        scadenza: !isNew && isTracked({categoria: ov.querySelector('#f-cat').value}) ? it.scadenza : (ov.querySelector('#f-scad').value || ''),
         categoria: ov.querySelector('#f-cat').value,
         marca: ov.querySelector('#f-marca').value.trim(),
         formato: ov.querySelector('#f-form').value.trim(),
@@ -691,6 +853,9 @@ function openForm(it, prefill){
   });
 }
 
+const REC_CAT = ['Latticini', 'Carne e pesce', 'Frutta e verdura'];
+// categorie di serie + personalizzate presenti nei prodotti + eventuali già attive (non si perdono al salvataggio)
+const catNames = () => [...new Set([...DEF_CAT, ...items.map(i => i.categoria).filter(Boolean), ...(srv.config.catScad || [])])];
 function openSettings(){
   const shareLink = cfg.url ? location.origin + location.pathname + '#u=' + encodeURIComponent(cfg.url) + '&t=' + encodeURIComponent(cfg.token) : '';
   openSheet(`
@@ -701,6 +866,10 @@ function openSettings(){
     <label>Token</label><input class="in" id="s-tok" value="${esc(cfg.token)}">
     <button class="btn" id="s-save">Salva</button>
     ${shareLink ? `<button class="btn sec2" id="s-share">Invia link di configurazione</button><p class="hint">Mandalo ad Alba: aprendolo, URL e token si compilano da soli.</p>` : ''}
+    ${lotsEnabled() ? `<div class="sec" style="margin-top:18px">Scadenze per categoria</div>
+    <p class="hint" style="margin:0 2px 8px">Attivo: ogni carico chiede la scadenza e il consumo parte dal lotto più vicino. Spento: scadenza unica facoltativa, come prima.</p>
+    ${catNames().map(c => `<label class="list-chk" style="margin:0 0 6px"><input type="checkbox" data-cat="${esc(c)}" ${srv.config.catScad.includes(c) ? 'checked' : ''}><div class="info"><div class="name">${esc(c)}</div></div></label>`).join('')}
+    <button class="btn sec2" id="s-rec">Attiva le tre categorie consigliate</button>` : ''}
     <button class="btn sec2" id="s-csv">Esporta CSV</button>
     <button class="btn sec2" id="s-sync">Sincronizza ora</button>
     <p class="hint">App v${VERSION} · Backend v${esc(srv.version || '?')} · Prodotti: ${items.length} · In attesa di sync: ${pending.length}${syncErr ? ' · Errore: ' + esc(syncErr) : ''}</p>
@@ -715,6 +884,13 @@ function openSettings(){
     };
     const sh = ov.querySelector('#s-share');
     if (sh) sh.onclick = () => shareText('Dispensa – link di configurazione', shareLink);
+    const boxes = () => [...ov.querySelectorAll('[data-cat]')];
+    boxes().forEach(cb => cb.onchange = () => setCatScad(boxes().filter(x => x.checked).map(x => x.dataset.cat)));
+    const rec = ov.querySelector('#s-rec');
+    if (rec) rec.onclick = () => {
+      boxes().forEach(x => { if (REC_CAT.includes(x.dataset.cat)) x.checked = true; });
+      setCatScad(boxes().filter(x => x.checked).map(x => x.dataset.cat)); toast('Attivate: ' + REC_CAT.join(', '));
+    };
     ov.querySelector('#s-csv').onclick = exportCsv;
     ov.querySelector('#s-sync').onclick = () => { closeSheet(); sync(); };
   });
@@ -771,6 +947,7 @@ async function openScanner(){
 async function closeScanner(){
   try { if (qr && qr.isScanning) await qr.stop(); qr && qr.clear(); } catch(e){}
   qr = null; $('#scan').classList.add('hidden');
+  if (lp && lp.host === 'panel') lotClose();
   scanOpen = false; render();
 }
 function pauseScan(){ try { qr && qr.isScanning && qr.pause(true); } catch(e){} }
@@ -788,7 +965,7 @@ function beep(ok = true){
 
 async function onCode(code){
   code = String(code).trim();
-  if (!code || busy) return;
+  if (!code || busy || pickerOpen) return;   // mentre il selettore data nativo è aperto le letture si ignorano
   const read = decideRead(rd, code, Date.now());
   if (read === 'silent') return;
   // conferma visiva prima di qualsiasi await (≤ 50 ms)
@@ -798,12 +975,21 @@ async function onCode(code){
   if (it && scanMode !== 'ask') {
     const d = scanMode === 'in' ? 1 : -1, kind = d > 0 ? 'in' : 'out', from = it.qty;
     if (d < 0 && from <= 0) { flash('warn'); beep(false); scanMsg(scanText('warn', it.nome), 'warn'); return; }
-    flash(kind); changeQty(it.id, d); beep();
-    scanMsg(scanText(kind, it.nome, from, it.qty, d < 0 && inSpesa(it) ? ' · in lista spesa' : ''), kind);
+    flash(kind);
+    if (d > 0) { plusOne(it.id); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, plusOne.date === null ? '' : plusOne.date ? ` · scade ${fmtDM(plusOne.date)}` : ' · senza data'), kind); return; }
+    if (inherit && inherit.id !== it.id) inherit = null;
+    const tr = isTracked(it); changeQty(it.id, d); beep();
+    let x = '';
+    if (tr) {   // R1.10: data del lotto consumato e, se diverso, il prossimo
+      const t = changeQty.taken[0], nx = sorted(effectiveLots(it))[0];
+      if (t) x += t.d ? ` · scade ${fmtDM(t.d)}` : ' · senza data';
+      if (nx && nx.d && (!t || nx.d !== t.d)) x += ` · poi ${fmtDM(nx.d)}`;
+    }
+    scanMsg(scanText(kind, it.nome, from, it.qty, x + (inSpesa(it) ? ' · in lista spesa' : '')), kind);
     return;
   }
 
-  busy = true; pauseScan(); beep();
+  lotClose(); busy = true; pauseScan(); beep();
   if (it) { closeSheet.after = resumeScan; openDetail(it.id); return; }
 
   // prodotto nuovo → Open Food Facts
@@ -865,7 +1051,7 @@ async function shareText(title, text){
   try { await navigator.clipboard.writeText(text); toast('Copiato negli appunti'); } catch(e){ prompt('Copia:', text); }
 }
 function exportCsv(){
-  const cols = ['nome','marca','formato','categoria','posizione','qty','scortaMin','scadenza','barcode','note'];
+  const cols = ['nome','marca','formato','categoria','posizione','qty','scortaMin','scadenza','barcode','note','lotti'];
   const csv = [cols.join(';')].concat(items.map(i => cols.map(c => `"${String(i[c] ?? '').replace(/"/g,'""')}"`).join(';'))).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + csv], {type:'text/csv'}));
@@ -881,7 +1067,7 @@ function start(){
 document.addEventListener('click', e => {
   const t = e.target;
   const qb = t.closest('.row .qb');
-  if (qb) { const it = changeQty(qb.dataset.id, +qb.dataset.d); if (it && inSpesa(it) && +qb.dataset.d < 0 && it.qty === it.scortaMin - 1) toast(`${it.nome} → lista spesa`); return; }
+  if (qb) { const it = +qb.dataset.d > 0 ? plusOne(qb.dataset.id) : changeQty(qb.dataset.id, +qb.dataset.d); if (it && inSpesa(it) && +qb.dataset.d < 0 && it.qty === it.scortaMin - 1) toast(`${it.nome} → lista spesa`); return; }
   const op = t.closest('[data-open]'); if (op) return openDetail(op.dataset.open);
   const th = t.closest('.row .thumb'); if (th) return openDetail(th.parentElement.dataset.id);
   const ch = t.closest('#chips .chip'); if (ch) { filter = ch.dataset.f; render(); window.scrollTo(0,0); return; }

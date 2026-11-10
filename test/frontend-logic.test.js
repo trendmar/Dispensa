@@ -150,6 +150,132 @@ t('la versione e la config del backend si salvano in disp.srv a ogni risposta', 
 });
 t('VERSION è 1.2.0', async () => { assert.strictEqual((await mk()).app.VERSION, '1.2.0'); });
 
+/* ---------- Task 6: scadenze per lotti (R1) ---------- */
+const TR = { version: '1.2.0', config: { catScad: ['Latticini'] } };
+const LITEMS = () => { const a = ITEMS(); Object.assign(a[0], { qty: 4, scadenza: '2026-11-12', lotti: JSON.stringify([{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 3 }]) }); return a; };
+const trFetch = (u, o) => (o && o.method === 'POST' ? hang(u, o) : Promise.resolve({ json: async () => ({ ok: true, version: '1.2.0', items: LITEMS(), extras: [], config: { catScad: ['Latticini'] } }) }));
+const mkT = (o = {}) => mk(Object.assign({ fetchImpl: trFetch, ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'in', 'disp.srv': TR } }, o));
+const ops = h => h.plain(h.app.pending);
+const p1 = h => h.app.items.find(i => i.id === 'p1');
+const lotsOf = it => JSON.parse(it.lotti || '[]');
+const dayStr = (h, off) => { const d = new Date(h.clock.t); d.setDate(d.getDate() + off); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+
+t('lotsEnabled: falso senza config o con backend 1.1, vero con 1.10 e catScad vuoto (R1.15)', async () => {
+  const { app } = await mk();
+  app.noteSrv({ version: '1.2.0' }); assert.strictEqual(app.lotsEnabled(), false);
+  app.noteSrv({ version: '1.1', config: { catScad: [] } }); assert.strictEqual(app.lotsEnabled(), false);
+  app.noteSrv({ version: '1.10', config: { catScad: [] } }); assert.strictEqual(app.lotsEnabled(), true);
+});
+t('expiry: prodotto tracciato → prossima data tra i lotti; non tracciato → scadenza', async () => {
+  const h = await mkT(); const a = p1(h);
+  a.qty = 3; a.lotti = JSON.stringify([{ d: '', q: 1 }, { d: '2026-11-20', q: 2 }]); a.scadenza = '';
+  assert.strictEqual(h.app.expiry(a), '2026-11-20');
+  const pasta = h.app.items.find(i => i.id === 'p3'); pasta.scadenza = '2026-12-01';
+  assert.strictEqual(h.app.isTracked(a), true); assert.strictEqual(h.app.isTracked(pasta), false);
+  assert.strictEqual(h.app.expiry(pasta), '2026-12-01');
+});
+t('expTag: con più lotti aggiunge · ×N se il lotto vicino è inferiore al totale', async () => {
+  const h = await mkT(); const a = p1(h); const d3 = dayStr(h, 3), d9 = dayStr(h, 9);
+  a.qty = 5; a.lotti = JSON.stringify([{ d: d3, q: 2 }, { d: d9, q: 3 }]);
+  assert.ok(h.app.expTag(a).includes('scade tra 3 gg · ×2'), h.app.expTag(a));
+  a.qty = 2; a.lotti = JSON.stringify([{ d: d3, q: 2 }]);
+  const one = h.app.expTag(a); assert.ok(one.includes('scade tra 3 gg') && !one.includes('×'), one);
+});
+t('consumo: messaggio con la data del lotto consumato e "poi" il prossimo; nessun lot nell\'operazione', async () => {
+  const h = await mkT({ ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'out', 'disp.srv': TR } }); h.app.openScanner();
+  await h.app.onCode('123');
+  assert.strictEqual(msg(h), '− Yogurt greco · 4 → 3 · scade 12/11 · poi 20/11');
+  eq(ops(h).map(o => [o.op, o.delta, 'lot' in o]), [['delta', -1, false]]);
+  eq(lotsOf(p1(h)), [{ d: '2026-11-20', q: 3 }]); assert.strictEqual(p1(h).scadenza, '2026-11-20'); assert.strictEqual(h.app.lp, null);
+});
+t('carico su categoria attiva: unità subito registrata senza data e pannello Scadenza? con contatore', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
+  eq(ops(h).map(o => [o.op, o.delta, 'lot' in o]), [['delta', 1, false]]);
+  assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual(h.app.lp.n, 1); assert.strictEqual(h.app.lp.host, 'panel');
+  assert.ok(h.el('#lotpanel').rec.innerHTML.includes('Scadenza?') && h.el('#lotpanel').rec.innerHTML.includes('+7 g') && h.el('#lotpanel').rec.innerHTML.includes('Senza data'));
+});
+t('6 unità dello stesso prodotto prima della scelta → un solo lotMove con q = 6', async () => {
+  const h = await mkT(); h.app.openScanner();
+  for (let i = 0; i < 6; i++) { await h.app.onCode('123'); h.advance(3000); }
+  assert.strictEqual(h.app.lp.n, 6);
+  h.app.lotChoose('2026-12-01');
+  const o = ops(h); eq(o.filter(x => x.op === 'delta').length, 6); eq(o.filter(x => x.op === 'lotMove').map(x => [x.id, x.from, x.to, x.q]), [['p1', '', '2026-12-01', 6]]);
+  eq(lotsOf(p1(h)), [{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 3 }, { d: '2026-12-01', q: 6 }].sort((a, b) => a.d < b.d ? -1 : 1));
+  assert.strictEqual(p1(h).qty, 10); assert.strictEqual(h.app.lp, null); eq(h.app.lastExp.p1, '2026-12-01');
+});
+t('scelta dopo la prima unità: le successive vanno nel lotto scelto (delta con lot, nessun pannello) per 90 s', async () => {
+  const h = await mkT(); h.app.openScanner();
+  await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); h.advance(3000);
+  await h.app.onCode('123');
+  eq(ops(h).map(o => [o.op, 'lot' in o ? o.lot : undefined]), [['delta', undefined], ['lotMove', undefined], ['delta', '2026-12-01']]);
+  assert.strictEqual(h.app.lp, null); assert.strictEqual(msg(h), '＋ Yogurt greco · 5 → 6 · scade 01/12');
+  h.advance(91000); await h.app.onCode('123');
+  assert.strictEqual(h.app.lp && h.app.lp.n, 1); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
+});
+t('"Senza data" è una scelta esplicita: nessun lotMove, ma le unità successive seguono (lot vuoto)', async () => {
+  const h = await mkT(); h.app.openScanner();
+  await h.app.onCode('123'); h.app.lotChoose(''); h.advance(3000); await h.app.onCode('123');
+  eq(ops(h).map(o => o.op), ['delta', 'delta']); assert.strictEqual(ops(h)[1].lot, ''); assert.strictEqual(h.app.lp, null);
+});
+t('pannello scaduto senza scelta (8 s): niente lotMove, ricompare alla scansione successiva; un altro prodotto lo sostituisce', async () => {
+  const h = await mkT(); h.app.openScanner();
+  await h.app.onCode('123'); h.advance(7999); assert.ok(h.app.lp); h.advance(2); assert.strictEqual(h.app.lp, null);
+  eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.inherit, null);
+  h.advance(3000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1);
+  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2'); assert.strictEqual(h.app.lp.n, 1);
+  assert.ok(!ops(h).some(o => o.op === 'lotMove'));
+});
+t('tasto + in lista (fuori dallo scanner): pannello #lotbar; chiusura con scelta → lotMove', async () => {
+  const h = await mkT(); h.app.plusOne('p1');
+  assert.strictEqual(h.app.lp.host, 'bar'); assert.ok(h.el('#lotbar').rec.innerHTML.includes('Scadenza?'));
+  h.app.lotChoose('2026-12-05');
+  eq(ops(h).map(o => o.op), ['delta', 'lotMove']); assert.ok(h.el('#lotbar').classList.contains('hidden'));
+});
+t('upsert su prodotto tracciato: lotti e scadenza derivati, qty per differenza sui lotti senza data', async () => {
+  const h = await mkT(); const out = Object.assign({}, p1(h), { nome: 'Yogurt', scadenza: '1999-01-01', lotti: '[]' });
+  h.app.upsert(out, 2);
+  assert.strictEqual(p1(h).qty, 6); assert.strictEqual(p1(h).scadenza, '2026-11-12');
+  eq(lotsOf(p1(h)), [{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 3 }, { d: '', q: 2 }]);
+  assert.strictEqual(h.app.lp, null);
+});
+t('setCatScad: applica in locale, salva disp.srv e accoda cfgSet', async () => {
+  const h = await mkT(); h.app.setCatScad(['Latticini', 'Carne e pesce', 'Latticini']);
+  eq(h.plain(h.app.srv.config), { catScad: ['Latticini', 'Carne e pesce'] }); eq(h.store('disp.srv').config.catScad, ['Latticini', 'Carne e pesce']);
+  eq(ops(h), [{ op: 'cfgSet', key: 'catScad', value: ['Latticini', 'Carne e pesce'], user: 'Mario', opId: ops(h)[0].opId }]);
+});
+t('gating spento (backend 1.1): comportamento 1.1, mai lot, lotMove, cfgSet né pannello', async () => {
+  const old = (u, o) => Promise.resolve({ json: async () => ({ ok: true, version: '1.1', items: LITEMS(), extras: [] }) });
+  const h = await mk({ fetchImpl: old, ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'in', 'disp.srv': { version: '1.1', config: null } } });
+  h.app.openScanner(); await h.app.onCode('123'); h.app.plusOne('p1'); h.app.setCatScad(['Latticini']); h.app.moveLot(p1(h), '', '2026-12-01', 1);
+  assert.ok(ops(h).length >= 2 && ops(h).every(o => o.op === 'delta' && !('lot' in o)), JSON.stringify(ops(h)));
+  assert.strictEqual(h.app.lp, null); assert.strictEqual(h.app.lotsEnabled(), false); assert.strictEqual(p1(h).qty, 6);
+});
+
+t('scheda, form, Impostazioni e filtro "Da datare" con prodotti tracciati: HTML coerente, nessun errore', async () => {
+  const h = await mkT(); const { app } = h; const a = p1(h); a.lotti = JSON.stringify([{ d: '', q: 1 }, { d: '2026-11-20', q: 3 }]);
+  app.render(); const main = h.el('#main').rec.innerHTML; assert.ok(main.includes('Yogurt greco'));
+  assert.ok(h.el('#chips').rec.innerHTML.includes('Da datare'), 'chip Da datare');
+  const sheet = () => h.el('#sheet-root').rec.innerHTML;
+  app.openDetail('p1'); assert.ok(sheet().includes('id="d-lots"') && sheet().includes('Prossima scadenza'));
+  app.openDetail('p3'); assert.ok(!sheet().includes('id="d-lots"'));
+  app.openForm(a); assert.ok(sheet().includes('id="f-scad-ro"') && sheet().includes('Prossima scadenza') && sheet().includes('2 lotti'));
+  assert.ok(sheet().includes('id="f-scad-wrap" class="hidden"'));
+  app.openForm(app.items.find(i => i.id === 'p3')); assert.ok(sheet().includes('id="f-scad-wrap" class=""') && sheet().includes('id="f-scad-ro" class="hidden"'));
+  app.openForm(null); assert.ok(!sheet().includes('f-scad-ro') && sheet().includes('id="f-scad-wrap" class=""'));
+  app.openSettings(); assert.ok(sheet().includes('Scadenze per categoria') && sheet().includes('Attiva le tre categorie consigliate') && sheet().includes('data-cat="Latticini" checked'));
+  const old = await mk({ fetchImpl: async () => ({ json: async () => ({ ok: true, version: '1.1', items: ITEMS(), extras: [] }) }), ls: { 'disp.cfg': CFG, 'disp.items': ITEMS(), 'disp.srv': { version: '1.1', config: null } } });
+  old.app.openSettings(); assert.ok(!old.el('#sheet-root').rec.innerHTML.includes('Scadenze per categoria'));
+  old.app.openDetail('p1'); assert.ok(!old.el('#sheet-root').rec.innerHTML.includes('d-lots'));
+});
+
+t('lotto ereditato: un altro prodotto in mezzo lo annulla, lo stesso codice richiede di nuovo la data', async () => {
+  const h = await mkT(); h.app.openScanner();
+  await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); assert.ok(h.app.inherit);
+  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.inherit, null); h.app.lotChoose('');
+  h.advance(3000); await h.app.onCode('123');
+  assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
+});
+
 (async () => {
   let n = 0;
   for (const [name, f] of tests) { await f(); n++; console.log('ok -', name); }
