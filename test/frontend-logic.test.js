@@ -217,13 +217,27 @@ t('"Senza data" è una scelta esplicita: nessun lotMove, ma le unità successive
   await h.app.onCode('123'); h.app.lotChoose(''); h.advance(3000); await h.app.onCode('123');
   eq(ops(h).map(o => o.op), ['delta', 'delta']); assert.strictEqual(ops(h)[1].lot, ''); assert.strictEqual(h.app.lp, null);
 });
-t('pannello scaduto senza scelta (15 s): niente lotMove, ricompare alla scansione successiva; un altro prodotto lo sostituisce', async () => {
+t('pannello persistente: resta aperto finché non si sceglie o si tocca ✕; ✕ lascia le unità senza data; un altro prodotto lo sostituisce', async () => {
   const h = await mkT(); h.app.openScanner();
-  await h.app.onCode('123'); h.advance(14999); assert.ok(h.app.lp); h.advance(2); assert.strictEqual(h.app.lp, null);
-  eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.inherit, null);
+  await h.app.onCode('123'); h.advance(120000); assert.ok(h.app.lp, 'nessun timeout'); assert.strictEqual(h.app.lp.n, 1);
+  h.app.lotClose(); assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.inherit, null);
   h.advance(3000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1);
   h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2'); assert.strictEqual(h.app.lp.n, 1);
   assert.ok(!ops(h).some(o => o.op === 'lotMove'));
+});
+t('pannello: propone i lotti esistenti come scelte, più nuova data, e un pulsante ✕', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
+  const html = h.el('#lotpanel').rec.innerHTML;
+  assert.ok(html.includes('data-d="2026-11-12"') && html.includes('12/11 · ×1') && html.includes('data-d="2026-11-20"') && html.includes('20/11 · ×3'), html);
+  assert.ok(html.includes('+7 g') && html.includes('+30 g') && html.includes('Scegli') && html.includes('Senza data') && html.includes('data-lpx'), html);
+});
+t('tasto + (lista/scheda): chiede il lotto ogni volta, senza lotto ereditato; il contatore somma e una sola scelta sposta tutto', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotChoose('2026-12-01'); h.app.closeScanner(); await h.flush();
+  h.advance(3000); h.app.plusOne('p1');
+  assert.ok(h.app.lp && h.app.lp.n === 1, 'chiede di nuovo il lotto'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
+  h.advance(60000); h.app.plusOne('p1'); assert.strictEqual(h.app.lp.n, 2);
+  h.app.lotChoose('2026-11-20');
+  eq(ops(h).slice(-1).map(o => [o.op, o.from, o.to, o.q]), [['lotMove', '', '2026-11-20', 2]]);
 });
 t('tasto + in lista (fuori dallo scanner): pannello #lotbar; chiusura con scelta → lotMove', async () => {
   const h = await mkT(); h.app.plusOne('p1');
@@ -276,13 +290,11 @@ t('lotto ereditato: un altro prodotto in mezzo lo annulla, lo stesso codice rich
   assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual('lot' in ops(h).slice(-1)[0], false);
 });
 
-t('selettore data aperto: il pannello non si chiude per timeout e le letture sono ignorate; dopo 20 s senza scelta si chiude', async () => {
+t('selettore data aperto: il pannello resta e le letture sono ignorate per 20 s; poi lo scanner torna libero', async () => {
   const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
   h.advance(7000); h.app.lotPickStart();                    // tap su "📅 Scegli" (iOS non invia focus)
-  h.advance(18000); assert.ok(h.app.lp, 'ancora aperto dopo 25 s dalla scansione');
-  h.advance(1000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual(ops(h).length, 1, 'lettura ignorata col selettore aperto');
-  h.advance(20000); assert.strictEqual(h.app.lp, null);
-  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2');   // poi lo scanner torna libero
+  h.advance(19000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p1'); assert.strictEqual(ops(h).length, 1, 'lettura ignorata col selettore aperto');
+  h.advance(2000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2');
 });
 t('selettore data: la scelta chiude il pannello, registra un solo lotMove e libera lo scanner', async () => {
   const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart(); h.app.lotChoose('2026-12-24');

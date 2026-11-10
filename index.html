@@ -122,7 +122,9 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 #lotpanel,#lotbar{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
 #lotpanel{position:absolute;left:10px;right:10px;bottom:calc(84px + var(--safe-b));z-index:6}
 #lotbar{position:fixed;left:10px;right:10px;bottom:calc(84px + var(--safe-b));z-index:45}
-.lp-h{font-size:14px;margin-bottom:8px}
+.lp-h{font-size:14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.lp-h small{color:var(--mut);font-size:12px}
+.lp-x{width:34px;height:34px;border-radius:10px;background:var(--bg);font-size:16px;color:var(--ink);flex:none}
 .lp-r{display:flex;gap:6px;flex-wrap:wrap}
 .lp-b{padding:9px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font-size:14px;font-weight:600;color:var(--ink)}
 .lp-b:active{background:var(--line)}
@@ -337,7 +339,7 @@ let syncing = false, syncErr = '', retryT = 0, scanOpen = false;
 let srv = load(LS.srv, {version: '', config: null});   // ultima versione/config noti del backend
 let lastExp = load(LS.lastExp, {});                     // id prodotto → ultima data scelta (max 200)
 let inherit = null, lp = null, pickerUntil = 0;         // lotto ereditato {id,d,at}; pannello Scadenza? {id,n,host,sheet,t}; selettore data nativo aperto fino a…
-const QUICK_DAYS = [7, 30], LP_MS = 15000, PICK_MS = 20000, INHERIT_MS = 90000, LASTEXP_MAX = 200;
+const QUICK_DAYS = [7, 30], PICK_MS = 20000, INHERIT_MS = 90000, LASTEXP_MAX = 200;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -500,13 +502,14 @@ function moveLot(it, from, to, q){
   queue({op:'lotMove', id: it.id, from: isoOrEmpty(from), to: isoOrEmpty(to), q});
 }
 // + di una unità (scanner in modalità Carica, tasto + in lista o scheda). Prodotto con scadenza attiva: unità subito
-// registrata senza data, poi pannello; se c'è un lotto ereditato (stessa scelta, stesso prodotto, <90 s) va lì senza pannello.
-function plusOne(id){
+// registrata senza data, poi pannello. Solo per le scansioni (viaScan): se c'è un lotto ereditato (stessa scelta, stesso
+// prodotto, <90 s) l'unità va lì senza pannello. Dai tasti + il lotto si chiede sempre.
+function plusOne(id, viaScan){
   const it = byId(id); if (!it) return;
   if (inherit && inherit.id !== id) inherit = null;
   if (lp && lp.id !== id) lotClose();
   const tracked = isTracked(it);
-  if (tracked && inherit && Date.now() - inherit.at < INHERIT_MS) { changeQty(id, 1, inherit.d); plusOne.date = inherit.d; return it; }
+  if (tracked && viaScan && inherit && Date.now() - inherit.at < INHERIT_MS) { changeQty(id, 1, inherit.d); plusOne.date = inherit.d; return it; }
   changeQty(id, 1); plusOne.date = null;
   if (tracked) lotPrompt(it);
   return it;
@@ -514,32 +517,30 @@ function plusOne(id){
 function lotPrompt(it){
   const host = $('#sheet-root').innerHTML ? 'bar' : (scanOpen ? 'panel' : 'bar');
   if (lp && lp.id === it.id && lp.host === host) lp.n++;
-  else { lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML, t: 0}; }
-  lotRender(); lotTimer();
+  else { lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML}; }
+  lotRender();
 }
 const lotHost = () => $(lp.host === 'panel' ? '#lotpanel' : '#lotbar');
 function lotRender(){
   const it = byId(lp.id), lots = effectiveLots(it);
-  const same = lastExp[it.id] || lots.reduce((m, l) => (l.d > m ? l.d : m), '');
+  const dated = sorted(lots).filter(l => l.d).slice(0, 4);   // lotti esistenti, il più vicino per primo
+  const same = lastExp[it.id];
   const b = (d, t) => `<button class="lp-b" data-lp data-d="${d}">${t}</button>`;
   const el = lotHost();
-  el.innerHTML = `<div class="lp-h"><b>Scadenza?</b> ${esc(it.nome)} ×${lp.n}</div><div class="lp-r">`
-    + (same ? b(same, 'Stessa: ' + fmtDM(same)) : '')
+  el.innerHTML = `<div class="lp-h"><span><b>Scadenza?</b> ${esc(it.nome)} ×${lp.n}<br><small>Scegli il lotto o creane uno nuovo</small></span><button class="lp-x" data-lpx aria-label="Chiudi">✕</button></div><div class="lp-r">`
+    + dated.map(l => b(l.d, `${fmtDM(l.d)} · ×${l.q}`)).join('')
+    + (same && !dated.some(l => l.d === same) ? b(same, 'Stessa: ' + fmtDM(same)) : '')
     + QUICK_DAYS.map(n => b(isoDay(n), `+${n} g`)).join('')
     + `<label class="lp-b lp-pick">📅 Scegli<input type="date" class="lp-date"></label>` + b('', 'Senza data') + '</div>';
   el.classList.remove('hidden');
 }
-// si chiude da solo dopo 15 s senza scansioni né tocchi: le unità restano senza data, nessuna scelta registrata.
-// Col selettore data nativo aperto (iOS non invia focus/blur sul campo data) si aspetta fino a PICK_MS dal tocco.
+// Il pannello resta aperto finché l'utente non sceglie o tocca ✕ (le unità restano allora senza data).
+// Col selettore data nativo aperto (iOS non invia focus/blur sul campo data) le letture si ignorano per PICK_MS dal tocco.
 const pickerOpen = () => Date.now() < pickerUntil;
-function lotTimer(){
-  clearTimeout(lp.t);
-  lp.t = setTimeout(() => { if (!lp) return; if (pickerOpen()) lotTimer(); else lotClose(); }, LP_MS);
-}
-function lotPickStart(){ pickerUntil = Date.now() + PICK_MS; if (lp) lotTimer(); }
+function lotPickStart(){ pickerUntil = Date.now() + PICK_MS; }
 function lotClose(){
   if (!lp) return;
-  clearTimeout(lp.t); const el = lotHost(); el.innerHTML = ''; el.classList.add('hidden'); lp = null; pickerUntil = 0;
+  const el = lotHost(); el.innerHTML = ''; el.classList.add('hidden'); lp = null; pickerUntil = 0;
 }
 // una sola operazione per scelta: lotMove con q = unità caricate da quando è comparso il pannello
 function lotChoose(d){
@@ -554,10 +555,13 @@ function lotChoose(d){
 }
 [$('#lotpanel'), $('#lotbar')].forEach(h => {
   const isDate = e => e.target.classList && e.target.classList.contains('lp-date');
-  h.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-lp]'); if (b) lotChoose(b.dataset.d); });
-  h.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('.lp-pick')) lotPickStart(); else if (lp) lotTimer(); });
+  h.addEventListener('click', e => {
+    if (e.target.closest && e.target.closest('[data-lpx]')) return lotClose();
+    const b = e.target.closest && e.target.closest('[data-lp]'); if (b) lotChoose(b.dataset.d);
+  });
+  h.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('.lp-pick')) lotPickStart(); });
   h.addEventListener('focusin', e => { if (isDate(e)) lotPickStart(); });
-  h.addEventListener('focusout', e => { if (isDate(e)) { pickerUntil = 0; if (lp) lotTimer(); } });
+  h.addEventListener('focusout', e => { if (isDate(e)) pickerUntil = 0; });
   h.addEventListener('change', e => { if (isDate(e)) lotChoose(e.target.value); });
 });
 // R2.4: evidenzia per 300 ms la riga (e il numero) appena cambiata
@@ -986,7 +990,7 @@ async function onCode(code){
     const d = scanMode === 'in' ? 1 : -1, kind = d > 0 ? 'in' : 'out', from = it.qty;
     if (d < 0 && from <= 0) { flash('warn'); beep(false); scanMsg(scanText('warn', it.nome), 'warn'); return; }
     flash(kind);
-    if (d > 0) { plusOne(it.id); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, plusOne.date === null ? '' : plusOne.date ? ` · scade ${fmtDM(plusOne.date)}` : ' · senza data'), kind); return; }
+    if (d > 0) { plusOne(it.id, true); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, plusOne.date === null ? '' : plusOne.date ? ` · scade ${fmtDM(plusOne.date)}` : ' · senza data'), kind); return; }
     if (inherit && inherit.id !== it.id) inherit = null;
     const tr = isTracked(it); changeQty(it.id, d); beep();
     let x = '';
