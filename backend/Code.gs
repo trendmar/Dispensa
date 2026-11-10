@@ -1,5 +1,5 @@
 /**
- * DISPENSA — backend Google Apps Script su Google Sheet          v1.1
+ * DISPENSA — backend Google Apps Script su Google Sheet          v1.2
  *
  * Fogli:
  *   Prodotti  — inventario (una riga per prodotto)
