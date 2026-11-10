@@ -40,6 +40,27 @@ La copia non ha un indirizzo `/exec`: serve un deployment **di prova** (non tocc
 4. Nelle Proprietà script della copia aggiungi `catScad` con valore `["Latticini"]`. Su un prodotto di categoria Latticini tocca **+** e poi **−**. Atteso: `lotti` si riempie con un JSON come `[{"d":"2026-11-10","q":3},{"d":"","q":1}]`, poi lo scarico toglie dal lotto con la data più vicina; `scadenza` mostra la data del primo lotto.
 5. Riporta `catScad` a `[]` (o elimina la proprietà) e verifica che i tocchi tornino identici a prima.
 
+## Prova su iPhone (Checkpoint 2 e 3)
+
+Si prova su una **copia** del foglio e su un indirizzo HTTPS separato dal sito in uso (per la fotocamera serve HTTPS). Non usare mai l'indirizzo del foglio vero. Dopo ogni aggiornamento dell'app di prova chiudi del tutto Safari e riaprilo. In Impostazioni la riga in fondo deve dire `App v1.2.0 · Backend v1.2.0`, senza "Aggiornamento incompleto"; se il backend risulta 1.1, nel deployment manca *Nuova versione* (il numero `const VERSION` nel codice non basta: il deployment serve l'ultima versione pubblicata).
+
+**Checkpoint 2: conferma visiva e sincronizzazione**
+1. In modalità silenziosa, **+ Carica** e un codice di un prodotto presente: lampo verde a tutto schermo, messaggio `＋ Nome · 3 → 4`, indicatore accanto alla ✕ che torna a `✓`. ✅ provato.
+2. **− Usa**: lampo corallo e `− Nome · 4 → 3`. Prodotto già a zero: lampo ambra e `già a 0`.
+3. Codice tenuto fermo 3 secondi: **un solo** carico. Tolto e riinquadrato entro 2,5 secondi: lampo grigio e "Già letto".
+4. Modo aereo: l'indicatore diventa `offline · N` e, tornata la rete, `✓`.
+5. Dopo un +/− dalla lista la riga si evidenzia per 300 ms.
+6. Un prodotto presente non deve mai aprire il modulo "Nuovo prodotto". Se succede, confronta il codice letto con quello nel foglio: una lettura sbagliata ma valida (EAN-13 con cifre diverse) è già gestita dalla lettura confermata.
+7. Le schede (Impostazioni, prodotto) si chiudono trascinando la linguetta verso il basso.
+
+**Checkpoint 3: scadenze per lotti**
+1. Impostazioni → **Scadenze per categoria**: gli interruttori restano accesi dopo la chiusura. "Attiva le tre categorie consigliate" accende Latticini, Carne e pesce, Frutta e verdura.
+2. **+ Carica** (scanner o tasto +) su un prodotto di una categoria attiva: l'unità è subito registrata senza data e compare il pannello **Scadenza?** con i lotti esistenti, `+7 g`, `+30 g`, `📅 Scegli`, `Senza data` e ✕. Il pannello **resta aperto** finché non scegli o tocchi ✕, anche con più unità (il contatore `×N` sale e una sola scelta le sposta tutte). Ogni carico successivo lo richiede di nuovo.
+3. **📅 Scegli** apre una riga con il campo data e **Conferma**: muovere la rotella non cambia nulla finché non tocchi Conferma. Stessa cosa per il cambio data di un lotto nella scheda (📅, poi OK).
+4. **− Usa** su un prodotto con più lotti: scarica dal lotto che scade prima (FEFO) con `scade 12/11 · poi 20/11`; compare la striscia `Tolto dal lotto 12/11 · Era un altro lotto?`. Toccando un altro lotto viene fatto **un solo** `lotMove`: quantità totale invariata.
+5. Nel foglio, scheda `Prodotti`: `qty` = somma dei `q` della colonna `lotti`, `scadenza` = prima data non vuota dei lotti. Nessuna riga nuova in `Movimenti` per le correzioni di lotto.
+6. Le date brevi mostrano l'anno (`gg/mm/aa`) solo se cadono oltre 300 giorni da oggi (o più di 60 giorni fa).
+
 ## Rollback (in quest'ordine)
 
 1. Ripubblicare il `index.html` precedente (`git revert` del commit del frontend).
