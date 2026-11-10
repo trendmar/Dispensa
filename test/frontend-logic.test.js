@@ -317,6 +317,23 @@ t('onScan: lo stesso codice sconosciuto letto due volte apre il modulo con quel 
   const h2 = await mk(); h2.app.openScanner(); await h2.app.onCode('123'); await h2.flush(); assert.strictEqual(opsMade(h2), 1);   // onCode (manuale) non aspetta conferme
 });
 
+/* ---------- Selettore data su iOS: il pannello non deve sparire mentre si sceglie ---------- */
+const fire = (h, sel, ev, target) => (h.el(sel).rec.handlers[ev] || []).forEach(fn => fn({ target: Object.assign({ classList: { contains: c => c === 'lp-date' }, closest: () => null }, target) }));
+t('nuova scansione dello stesso prodotto con pannello aperto: si aggiorna solo il contatore, i pulsanti (e il selettore data) non vengono riscritti', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
+  const sets = h.el('#lotpanel').rec.sets; h.advance(3000); await h.app.onCode('123');
+  assert.strictEqual(h.app.lp.n, 2); assert.strictEqual(h.el('#lotpanel').rec.sets, sets, 'innerHTML non riscritto'); assert.strictEqual(h.el('#lp-n').rec.textContent, '×2');
+});
+t('evento change vuoto del selettore (iOS) non chiude il pannello né sceglie "Senza data"; con una data sceglie', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart();
+  fire(h, '#lotpanel', 'change', { value: '' }); assert.ok(h.app.lp, 'ancora aperto'); eq(ops(h).map(o => o.op), ['delta']);
+  fire(h, '#lotpanel', 'change', { value: '2026-12-24' }); assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta', 'lotMove']);
+});
+t('focusout del campo data (iOS lo invia aprendo il selettore) non riabilita le letture prima dei 20 s', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart(); fire(h, '#lotpanel', 'focusout', {});
+  h.advance(5000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1); assert.strictEqual(ops(h).length, 1);
+});
+
 (async () => {
   let n = 0;
   for (const [name, f] of tests) { await f(); n++; console.log('ok -', name); }

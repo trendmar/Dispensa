@@ -512,8 +512,8 @@ function plusOne(id){
 }
 function lotPrompt(it){
   const host = $('#sheet-root').innerHTML ? 'bar' : (scanOpen ? 'panel' : 'bar');
-  if (lp && lp.id === it.id && lp.host === host) lp.n++;
-  else { lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML}; }
+  if (lp && lp.id === it.id && lp.host === host) { lp.n++; $('#lp-n').textContent = '×' + lp.n; return; }   // solo il contatore: riscrivere il pannello distruggerebbe il selettore data aperto
+  lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML};
   lotRender();
 }
 const lotHost = () => $(lp.host === 'panel' ? '#lotpanel' : '#lotbar');
@@ -523,7 +523,7 @@ function lotRender(){
   const same = lastExp[it.id];
   const b = (d, t) => `<button class="lp-b" data-lp data-d="${d}">${t}</button>`;
   const el = lotHost();
-  el.innerHTML = `<div class="lp-h"><span><b>Scadenza?</b> ${esc(it.nome)} ×${lp.n}<br><small>Scegli il lotto o creane uno nuovo</small></span><button class="lp-x" data-lpx aria-label="Chiudi">✕</button></div><div class="lp-r">`
+  el.innerHTML = `<div class="lp-h"><span><b>Scadenza?</b> ${esc(it.nome)} <span id="lp-n">×${lp.n}</span><br><small>Scegli il lotto o creane uno nuovo</small></span><button class="lp-x" data-lpx aria-label="Chiudi">✕</button></div><div class="lp-r">`
     + dated.map(l => b(l.d, `${fmtDM(l.d)} · ×${l.q}`)).join('')
     + (same && !dated.some(l => l.d === same) ? b(same, 'Stessa: ' + fmtDM(same)) : '')
     + QUICK_DAYS.map(n => b(isoDay(n), `+${n} g`)).join('')
@@ -556,8 +556,8 @@ function lotChoose(d){
   });
   h.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('.lp-pick')) lotPickStart(); });
   h.addEventListener('focusin', e => { if (isDate(e)) lotPickStart(); });
-  h.addEventListener('focusout', e => { if (isDate(e)) pickerUntil = 0; });
-  h.addEventListener('change', e => { if (isDate(e)) lotChoose(e.target.value); });
+  // iOS invia focusout all'apertura del selettore e change anche vuoti: contano solo il tocco (PICK_MS) e un change con una data
+  h.addEventListener('change', e => { if (isDate(e) && e.target.value) lotChoose(e.target.value); });
 });
 // R2.4: evidenzia per 300 ms la riga (e il numero) appena cambiata
 function hl(id, delta){
