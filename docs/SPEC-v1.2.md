@@ -228,6 +228,8 @@ Per i prodotti **senza** scadenza attiva ogni operazione si comporta esattamente
 | Lettura ravvicinata ignorata | grigio `#9aa19d` | ⟲ |
 | Prodotto nuovo | nessun flash: si apre il form | |
 
+**Lettura confermata (R2.2b, P0; aggiunta dopo la prova su iPhone).** Il decoder può restituire, di rado, un EAN-13 con cifre sbagliate ma checksum valido (caso reale: SMAC sgrassatore `8003650025968` letto `6005650085968`, che ha creato un prodotto doppio). Un codice proveniente dalla fotocamera vale solo se decodificato **due volte uguale di seguito entro 1,5 s** (`confirmRead`, `CONFIRM_MS`); una decodifica isolata o diversa dalla precedente viene scartata. La digitazione manuale non è soggetta alla conferma.
+
 **Doppia lettura (R2.2a, P0).** Poiché la libreria richiama la funzione a ogni frame, si traccia `lastSeenAt`, aggiornato a **ogni** callback per lo stesso codice. Finché il codice resta inquadrato senza interruzioni (callback a meno di 700 ms l'uno dall'altro) le riletture si scartano **in silenzio**, come oggi, senza flash e senza toccare il messaggio. Il feedback grigio e il messaggio `Già letto` compaiono solo se lo stesso codice **ricompare** dopo almeno 700 ms di assenza ed entro 2,5 s dall'ultima operazione registrata (`lastAt`).
 
 **Vincoli.** `pointer-events: none`; non mette in pausa la fotocamera; si riavvia pulito a scansioni ravvicinate (rimuovere la classe, forzare il reflow, riaggiungerla); `@keyframes` CSS; con `prefers-reduced-motion: reduce` niente ingrandimento, solo dissolvenza di 250 ms con la cornice. Il colore **non** è l'unico segnale: glifo e testo restano sempre.

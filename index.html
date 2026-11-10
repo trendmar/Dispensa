@@ -923,6 +923,15 @@ function decideRead(st, code, now){
   if (same && now - st.at < 2500) return 'dup';
   st.at = now; return 'process';
 }
+// Lettura confermata: il decoder può restituire, di rado, un EAN-13 con cifre sbagliate ma checksum valido (es. SMAC
+// 8003650025968 letto 6005650085968). Un codice dalla fotocamera vale solo se decodificato due volte uguale di seguito
+// entro CONFIRM_MS; un errore isolato viene scartato. La digitazione manuale passa direttamente da onCode().
+const CONFIRM_MS = 1500, cf = {code: '', at: 0};
+function confirmRead(st, code, now){
+  const ok = st.code === code && now - st.at <= CONFIRM_MS;
+  st.code = code; st.at = now; return ok;
+}
+function onScan(code){ code = String(code).trim(); if (code && confirmRead(cf, code, Date.now())) return onCode(code); }
 function scanText(kind, nome, from, to, extra = ''){
   if (kind === 'dup') return 'Già letto, attendi un attimo';
   if (kind === 'warn') return `⚠︎ ${nome} · già a 0`;
@@ -944,7 +953,7 @@ function setMode(m){
 function scanMsg(t, kind = ''){ const m = $('#scan-msg'); m.textContent = t; m.className = ('msg ' + kind).trim(); }
 
 async function openScanner(){
-  scanOpen = true; rd.code = ''; updateSync();
+  scanOpen = true; rd.code = ''; cf.code = ''; updateSync();
   $('#scan').classList.remove('hidden'); setMode(scanMode); busy = false;
   if (typeof Html5Qrcode === 'undefined') { scanMsg('Scanner non caricato (offline?). Digita il codice.'); return; }
   try {
@@ -953,7 +962,7 @@ async function openScanner(){
       formatsToSupport:[F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.QR_CODE],
       experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
     const w = Math.min(window.innerWidth * .8, 320);
-    await qr.start({facingMode:'environment'}, {fps:12, qrbox:{width:w, height:w*.5}, aspectRatio: window.innerHeight / window.innerWidth}, onCode, () => {});
+    await qr.start({facingMode:'environment'}, {fps:12, qrbox:{width:w, height:w*.5}, aspectRatio: window.innerHeight / window.innerWidth}, onScan, () => {});
   } catch(e) {
     scanMsg('Fotocamera non disponibile: ' + (e.message || e) + ' — digita il codice.');
   }

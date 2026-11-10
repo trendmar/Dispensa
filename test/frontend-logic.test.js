@@ -302,6 +302,31 @@ t('selettore data: la scelta chiude il pannello, registra un solo lotMove e libe
   h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.lp.id, 'p2');
 });
 
+/* ---------- Lettura confermata: una decodifica sbagliata isolata della fotocamera non deve creare un prodotto ---------- */
+const REAL = '8003650025968', MIS = '6005650085968';   // caso reale: SMAC sgrassatore, due EAN-13 validi
+t('confirmRead: serve la stessa decodifica due volte entro 1,5 s; un codice diverso riparte da capo', () => {
+  const { app } = loadApp({}); const st = { code: '', at: 0 };
+  eq(app.confirmRead(st, REAL, 1000), false); eq(app.confirmRead(st, REAL, 1200), true); eq(app.confirmRead(st, REAL, 1400), true);
+  eq(app.confirmRead(st, MIS, 1600), false); eq(app.confirmRead(st, REAL, 1800), false); eq(app.confirmRead(st, REAL, 2000), true);
+  eq(app.confirmRead(st, REAL, 4000), false);   // dopo una pausa (>1,5 s) serve di nuovo la conferma
+});
+t('onScan: una lettura errata isolata tra letture giuste non crea né apre nulla; poi il prodotto giusto viene caricato una sola volta', async () => {
+  const items = ITEMS(); items[0].barcode = REAL;
+  const h = await mk({ ls: { 'disp.cfg': CFG, 'disp.items': items, 'disp.mode': 'in' } }); h.app.openScanner();
+  for (const [c, ms] of [[MIS, 0], [REAL, 100], [MIS, 100], [REAL, 100], [REAL, 100]]) { h.advance(ms); await h.app.onScan(c); }
+  await h.flush(); eq(flashes(h), ['go in']); assert.strictEqual(opsMade(h), 1);
+  assert.strictEqual(h.el('#sheet-root').rec.innerHTML, '', 'nessun modulo di nuovo prodotto');
+});
+t('onScan: una sola lettura di un codice sconosciuto non apre il modulo di nuovo prodotto', async () => {
+  const h = await mk(); h.app.openScanner(); await h.app.onScan(MIS);
+  assert.strictEqual(h.el('#sheet-root').rec.innerHTML, ''); assert.strictEqual(opsMade(h), 0);
+});
+t('onScan: lo stesso codice sconosciuto letto due volte apre il modulo con quel codice; la digitazione manuale resta immediata', async () => {
+  const h = await mk({ fetchImpl: async () => okResp(ITEMS()) }); h.app.openScanner();
+  await h.app.onScan('999'); h.advance(100); await h.app.onScan('999'); assert.ok(h.el('#sheet-root').rec.innerHTML.includes('Nuovo prodotto'));
+  const h2 = await mk(); h2.app.openScanner(); await h2.app.onCode('123'); await h2.flush(); assert.strictEqual(opsMade(h2), 1);   // onCode (manuale) non aspetta conferme
+});
+
 (async () => {
   let n = 0;
   for (const [name, f] of tests) { await f(); n++; console.log('ok -', name); }
