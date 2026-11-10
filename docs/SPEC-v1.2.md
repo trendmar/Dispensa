@@ -183,7 +183,7 @@ Per i prodotti **senza** scadenza attiva ogni operazione si comporta esattamente
 | `qty = 0` | Nessun lotto; `scadenza` derivata vuota alla prossima scrittura |
 | Scarico oltre la giacenza | Si ferma a 0, nessun errore (come v1.1) |
 | Due telefoni scaricano insieme lo stesso prodotto | Entrambi FEFO sul server, sotto lock; somma lotti = `qty` |
-| Carico offline con data scelta | In coda: `delta` senza `lot`, poi `lotMove` (un solo meccanismo); l'ordine di invio è preservato. `delta` con `lot` solo per lotto ereditato e per la scheda |
+| Carico offline con data scelta | In coda: `delta` senza `lot`, poi `lotMove` (un solo meccanismo); l'ordine di invio è preservato. `delta` con `lot` solo dalla sezione Lotti della scheda |
 | Categoria spenta, quantità modificata, poi riaccesa | Riconciliazione (R1.3) |
 | Prodotto passa da categoria senza a categoria con scadenza | Lotto virtuale dalla `scadenza` esistente |
 | Data nel passato | Ammessa; il lotto compare come scaduto |
