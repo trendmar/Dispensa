@@ -463,7 +463,13 @@ function expTag(it){
   return `<span class="tag">${fmtDate(e)}${x}</span>`;
 }
 const fmtDate = d => d ? d.split('-').reverse().slice(0,2).join('/') + '/' + d.slice(2,4) : '';
-const fmtDM = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
+// dd/mm; l'anno (yy) solo se la data è fuori da [-60, +300] giorni da oggi: dentro quell'intervallo (meno di 365 giorni)
+// dd/mm non può essere confuso con lo stesso giorno di un altro anno, fuori sì (conserve, pasta con scadenze lunghe)
+function fmtDM(d){
+  if (!d) return '';
+  const n = daysTo(d), dm = d.slice(8, 10) + '/' + d.slice(5, 7);
+  return n !== null && n >= -60 && n <= 300 ? dm : dm + '/' + d.slice(2, 4);
+}
 const isSoon = it => { const d = daysTo(expiry(it)); return d !== null && d <= SOON_DAYS && it.qty > 0; };
 // P1 "Da datare": solo prodotti con lotti già scritti nel foglio che contengono un lotto senza data
 const needsDate = it => isTracked(it) && parseLots(it.lotti).some(l => l.d === '' && l.q > 0);

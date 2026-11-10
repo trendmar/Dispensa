@@ -154,7 +154,8 @@ t('VERSION è 1.2.0', async () => { assert.strictEqual((await mk()).app.VERSION,
 const TR = { version: '1.2.0', config: { catScad: ['Latticini'] } };
 const LITEMS = () => { const a = ITEMS(); Object.assign(a[0], { qty: 4, scadenza: '2026-11-12', lotti: JSON.stringify([{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 3 }]) }); return a; };
 const trFetch = (u, o) => (o && o.method === 'POST' ? hang(u, o) : Promise.resolve({ json: async () => ({ ok: true, version: '1.2.0', items: LITEMS(), extras: [], config: { catScad: ['Latticini'] } }) }));
-const mkT = (o = {}) => mk(Object.assign({ fetchImpl: trFetch, ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'in', 'disp.srv': TR } }, o));
+const NOW26 = Date.UTC(2026, 10, 10, 12);   // 10/11/2026: i lotti dei test sono del 2026
+const mkT = (o = {}) => mk(Object.assign({ now: NOW26, fetchImpl: trFetch, ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'in', 'disp.srv': TR } }, o));
 const ops = h => h.plain(h.app.pending);
 const p1 = h => h.app.items.find(i => i.id === 'p1');
 const lotsOf = it => JSON.parse(it.lotti || '[]');
@@ -378,6 +379,23 @@ t('tasto − in lista: stessa striscia (nel #lotbar); un nuovo carico dello stes
   const h = await mkOut(); h.app.minusOne('p1');
   assert.ok(h.app.us && h.app.us.host === 'bar' && h.el('#lotbar').rec.innerHTML.includes('Tolto dal lotto 12/11'));
   h.app.plusOne('p1'); assert.strictEqual(h.app.us, null); assert.ok(h.app.lp);
+});
+
+/* ---------- Anno nelle date dei messaggi solo quando serve ---------- */
+t('fmtDM: dd/mm entro [-60, +300] giorni da oggi (inequivoco), con anno a due cifre fuori', async () => {
+  const h = await mkT(); const { app } = h; const dm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
+  for (const off of [-60, 0, 2, 56, 300]) assert.strictEqual(app.fmtDM(dayStr(h, off)), dm(dayStr(h, off)), 'offset ' + off);
+  for (const off of [-61, -101, 301, 400, 900]) assert.strictEqual(app.fmtDM(dayStr(h, off)), dm(dayStr(h, off)) + '/' + dayStr(h, off).slice(2, 4), 'offset ' + off);
+  assert.strictEqual(app.fmtDM(''), '');
+});
+t('messaggio di scarico con scadenze lontane (conserve, pasta): anno solo sulle date lontane', async () => {
+  const far = dayStr(await mkT(), 500), near = dayStr(await mkT(), 20);
+  const items = LITEMS(); Object.assign(items[0], { qty: 4, scadenza: near, lotti: JSON.stringify([{ d: near, q: 1 }, { d: far, q: 3 }]) });
+  const srvItems = (u, o) => (o && o.method === 'POST' ? hang(u, o) : Promise.resolve({ json: async () => ({ ok: true, version: '1.2.0', items: JSON.parse(JSON.stringify(items)), extras: [], config: { catScad: ['Latticini'] } }) }));
+  const h = await mkOut({ fetchImpl: srvItems, ls: { 'disp.cfg': CFG, 'disp.items': items, 'disp.mode': 'out', 'disp.srv': TR } }); h.app.openScanner(); await h.app.onCode('123');
+  const dmN = near.slice(8, 10) + '/' + near.slice(5, 7), dmF = far.slice(8, 10) + '/' + far.slice(5, 7) + '/' + far.slice(2, 4);
+  assert.strictEqual(msg(h), '− Yogurt greco · 4 → 3 · scade ' + dmN + ' · poi ' + dmF);
+  assert.ok(h.el('#lotpanel').rec.innerHTML.includes(dmF + ' · ×3'), 'anche nei pulsanti della striscia');
 });
 
 (async () => {

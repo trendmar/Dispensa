@@ -156,6 +156,8 @@ Per i prodotti **senza** scadenza attiva ogni operazione si comporta esattamente
 
 **R1.10a (P1, aggiunta dopo la prova su iPhone): striscia di correzione dopo lo scarico.** Lo scarico resta immediato e FEFO. Se il prodotto aveva **almeno due lotti**, compare una striscia non bloccante (nello scanner al posto del pannello, altrove in `#lotbar`): `Tolto dal lotto 12/11 · Era un altro lotto?` con un pulsante per ogni altro lotto (`20/11 · ×3`, `Senza data · ×1`) e ✕. Toccare un lotto invia **un solo `lotMove`** dal lotto indicato al lotto da cui l'app ha tolto l'unità: la quantità totale non cambia e `Movimenti` non riceve voci in più. Nessun timer: la striscia riguarda solo l'ultima unità e la sostituisce la lettura successiva (o ✕); il pannello Scadenza? ha la precedenza. Con gating spento non compare.
 
+**R1.10b (P1, aggiunta dopo la prova su iPhone): anno nelle date dei messaggi solo quando serve.** Le date brevi (messaggi dello scanner, pulsanti del pannello Scadenza? e della striscia, toast) sono `gg/mm` se la data cade tra 60 giorni fa e 300 giorni da oggi (intervallo di meno di 365 giorni: `gg/mm` non è confondibile con lo stesso giorno di un altro anno) e `gg/mm/aa` fuori da quell'intervallo (conserve e pasta con scadenze lunghe). Funzione `fmtDM`. Tag e scheda mostrano già l'anno.
+
 **R1.11 (P0): scheda prodotto.** Per i prodotti con scadenza attiva, sezione **Lotti**: una riga per lotto con data, quantità e −/+ propri (`delta` con `lot`); **＋ Aggiungi lotto** (data e quantità: `delta` con `lot`); modifica data di un lotto (📅 apre la riga con il campo data, **OK** conferma con `lotMove` con `q` pari alla quantità del lotto). Il lotto senza data compare come "senza data ×n".
 
 **R1.12 (P0): form Nuovo e Modifica.**
