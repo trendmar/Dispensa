@@ -5,7 +5,7 @@ const fs = require('fs'); const path = require('path'); const vm = require('vm')
 
 function makeEl(sel) {
   const rec = { sel, innerHTML: '', textContent: '', className: '', value: '', onclick: null, sets: 0, classNames: [], texts: [], handlers: {}, dataset: {}, style: {} };
-  const classes = new Set();
+  const classes = new Set(); let kids = {};   // figli stabili finché il genitore non riscrive innerHTML
   const classList = { add: c => classes.add(c), remove: c => classes.delete(c), toggle: (c, on) => { if (on === undefined ? !classes.has(c) : on) classes.add(c); else classes.delete(c); }, contains: c => classes.has(c) };
   return new Proxy(rec, {
     get(t, k) {
@@ -13,8 +13,8 @@ function makeEl(sel) {
       if (k === 'rec') return rec;
       if (k === 'offsetWidth') return 0;
       if (k === 'closest') return () => null;
-      if (k === 'querySelector') return s => makeEl(s);
-      if (k === 'firstChild') return makeEl('child');
+      if (k === 'querySelector') return s => kids[s] || (kids[s] = makeEl(s));
+      if (k === 'firstChild') return kids.__first || (kids.__first = makeEl('child'));
       if (k === 'querySelectorAll') return () => [];
       if (k === 'addEventListener') return (ev, f) => { (t.handlers[ev] = t.handlers[ev] || []).push(f); };
       if (typeof k === 'symbol') return undefined;
@@ -22,7 +22,7 @@ function makeEl(sel) {
       return () => {};
     },
     set(t, k, v) {
-      if (k === 'innerHTML') { t.sets++; t.innerHTML = v; return true; }
+      if (k === 'innerHTML') { t.sets++; t.innerHTML = v; kids = {}; return true; }
       if (k === 'textContent') { t.texts.push(v); t.textContent = v; return true; }
       if (k === 'className') { t.classNames.push(v); t.className = v; return true; }
       t[k] = v; return true;

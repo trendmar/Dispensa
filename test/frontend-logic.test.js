@@ -324,10 +324,25 @@ t('nuova scansione dello stesso prodotto con pannello aperto: si aggiorna solo i
   const sets = h.el('#lotpanel').rec.sets; h.advance(3000); await h.app.onCode('123');
   assert.strictEqual(h.app.lp.n, 2); assert.strictEqual(h.el('#lotpanel').rec.sets, sets, 'innerHTML non riscritto'); assert.strictEqual(h.el('#lp-n').rec.textContent, '×2');
 });
-t('evento change vuoto del selettore (iOS) non chiude il pannello né sceglie "Senza data"; con una data sceglie', async () => {
-  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart();
-  fire(h, '#lotpanel', 'change', { value: '' }); assert.ok(h.app.lp, 'ancora aperto'); eq(ops(h).map(o => o.op), ['delta']);
-  fire(h, '#lotpanel', 'change', { value: '2026-12-24' }); assert.strictEqual(h.app.lp, null); eq(ops(h).map(o => o.op), ['delta', 'lotMove']);
+const clickT = (h, sel, map) => ((typeof sel === 'string' ? h.el(sel) : sel).rec.handlers.click || []).forEach(fn => fn({ target: { closest: q => (q in map ? map[q] : null) } }));
+t('selettore data iOS: il change (anche con una data, a ogni scatto della rotella) NON sceglie il lotto; serve Conferma', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123');
+  clickT(h, '#lotpanel', { '[data-lpscegli]': {} });                              // 📅 Scegli: mostra la riga data, non sceglie
+  fire(h, '#lotpanel', 'change', { value: '2026-12-02' }); fire(h, '#lotpanel', 'change', { value: '2026-12-03' });   // rotella che scorre
+  assert.ok(h.app.lp, 'ancora aperto'); eq(ops(h).map(o => o.op), ['delta']); assert.strictEqual(h.app.lp.pick, '2026-12-03');
+  clickT(h, '#lotpanel', { '[data-lpok]': {} });
+  assert.strictEqual(h.app.lp, null); eq(ops(h).filter(o => o.op === 'lotMove').map(o => [o.from, o.to, o.q]), [['', '2026-12-03', 1]]);
+});
+t('Conferma senza aver scelto una data non fa nulla', async () => {
+  const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); clickT(h, '#lotpanel', { '[data-lpok]': {} });
+  assert.ok(h.app.lp); eq(ops(h).map(o => o.op), ['delta']);
+});
+t('scheda: il cambio data di un lotto non usa change (rotella iOS); 📅 apre la riga, OK conferma con un solo lotMove', async () => {
+  const h = await mkT(); h.app.openDetail('p1'); const box = h.el('#sheet-root').firstChild.querySelector('#d-lots');
+  assert.ok(!(box.rec.handlers.change || []).length, 'nessun listener change');
+  assert.ok(box.rec.innerHTML.includes('data-edit') && !box.rec.innerHTML.includes('data-from'));
+  clickT(h, box, { '[data-ok]': {}, '.lot-wrap': { dataset: { d: '2026-11-12', q: '1' }, querySelector: () => ({ value: '2026-11-30' }) } });
+  eq(ops(h).map(o => [o.op, o.from, o.to, o.q]), [['lotMove', '2026-11-12', '2026-11-30', 1]]);
 });
 t('focusout del campo data (iOS lo invia aprendo il selettore) non riabilita le letture prima dei 20 s', async () => {
   const h = await mkT(); h.app.openScanner(); await h.app.onCode('123'); h.app.lotPickStart(); fire(h, '#lotpanel', 'focusout', {});

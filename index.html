@@ -128,12 +128,13 @@ summary{color:var(--acc);font-size:14px;font-weight:600;padding:4px 2px}
 .lp-r{display:flex;gap:6px;flex-wrap:wrap}
 .lp-b{padding:9px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font-size:14px;font-weight:600;color:var(--ink)}
 .lp-b:active{background:var(--line)}
-.lp-pick{position:relative;overflow:hidden;display:inline-block;margin:0}
-.lp-date{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+.lp-row{display:flex;gap:8px;margin-top:8px;align-items:center}
+.lp-date{flex:1;min-width:0;padding:9px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+.lp-ok{background:var(--acc);color:#fff;border-color:var(--acc)}
 .lot{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 8px;margin-bottom:6px}
 .lot-d{flex:1;font-size:15px}
-.lot-ed{position:relative;overflow:hidden;width:38px;height:38px;border-radius:10px;background:var(--bg);display:grid;place-items:center;margin:0;font-size:18px}
-.lot-ed input{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+.lot-edit{display:flex;gap:8px;margin:-2px 0 8px}
+.lot-edit .in{flex:1;min-width:0}
 .scan-sync{font-size:13px;color:#ccc;min-width:48px;text-align:right;white-space:nowrap}
 #flash{position:absolute;inset:0;z-index:5;pointer-events:none;opacity:0;display:grid;place-items:center;font-size:96px;font-weight:700;color:rgba(255,255,255,.95)}
 #flash.go{animation:flashgo .35s ease-out}
@@ -527,7 +528,8 @@ function lotRender(){
     + dated.map(l => b(l.d, `${fmtDM(l.d)} · ×${l.q}`)).join('')
     + (same && !dated.some(l => l.d === same) ? b(same, 'Stessa: ' + fmtDM(same)) : '')
     + QUICK_DAYS.map(n => b(isoDay(n), `+${n} g`)).join('')
-    + `<label class="lp-b lp-pick">📅 Scegli<input type="date" class="lp-date"></label>` + b('', 'Senza data') + '</div>';
+    + `<button class="lp-b" data-lpscegli>📅 Scegli</button>` + b('', 'Senza data') + '</div>'
+    + `<div class="lp-row hidden" id="lp-row"><input type="date" class="lp-date"><button class="lp-b lp-ok" data-lpok>Conferma</button></div>`;
   el.classList.remove('hidden');
 }
 // Il pannello resta aperto finché l'utente non sceglie o tocca ✕ (le unità restano allora senza data).
@@ -548,16 +550,19 @@ function lotChoose(d){
   const t = `${it.nome} ×${n} · ${d ? 'scade ' + fmtDM(d) : 'senza data'}`;
   if (scanOpen) scanMsg(t, 'in'); else toast(t);
 }
+// iOS invia 'change' sul campo data a ogni scatto della rotella (e focusout all'apertura): il change NON sceglie, memorizza
+// soltanto la data; il lotto si sceglie con Conferma. Il tocco su 📅 Scegli / sul campo sospende le letture per PICK_MS.
 [$('#lotpanel'), $('#lotbar')].forEach(h => {
   const isDate = e => e.target.classList && e.target.classList.contains('lp-date');
   h.addEventListener('click', e => {
-    if (e.target.closest && e.target.closest('[data-lpx]')) return lotClose();
-    const b = e.target.closest && e.target.closest('[data-lp]'); if (b) lotChoose(b.dataset.d);
+    const c = q => e.target.closest && e.target.closest(q);
+    if (c('[data-lpx]')) return lotClose();
+    if (c('[data-lpscegli]')) { if (lp) { lotHost().querySelector('#lp-row').classList.toggle('hidden'); lotPickStart(); } return; }
+    if (c('[data-lpok]')) { if (lp && lp.pick) lotChoose(lp.pick); return; }
+    const b = c('[data-lp]'); if (b) lotChoose(b.dataset.d);
   });
-  h.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('.lp-pick')) lotPickStart(); });
   h.addEventListener('focusin', e => { if (isDate(e)) lotPickStart(); });
-  // iOS invia focusout all'apertura del selettore e change anche vuoti: contano solo il tocco (PICK_MS) e un change con una data
-  h.addEventListener('change', e => { if (isDate(e) && e.target.value) lotChoose(e.target.value); });
+  ['input', 'change'].forEach(ev => h.addEventListener(ev, e => { if (isDate(e) && lp) { lp.pick = isoOrEmpty(e.target.value); lotPickStart(); } }));
 });
 // R2.4: evidenzia per 300 ms la riga (e il numero) appena cambiata
 function hl(id, delta){
@@ -744,10 +749,11 @@ function openDetail(id){
     const lotsView = () => {
       const box = ov.querySelector('#d-lots'); if (!box) return;
       const lots = effectiveLots(byId(id));
-      box.innerHTML = (lots.length ? lots.map(l => `<div class="lot" data-d="${l.d}">
+      box.innerHTML = (lots.length ? lots.map(l => `<div class="lot-wrap" data-d="${l.d}" data-q="${l.q}"><div class="lot">
           <span class="lot-d">${l.d ? fmtDate(l.d) : 'senza data'} ×${l.q}</span>
-          <label class="lot-ed" title="Cambia data">📅<input type="date" data-from="${l.d}" data-q="${l.q}"></label>
-          <button class="qb" data-ld="-1">−</button><button class="qb" data-ld="1">+</button></div>`).join('') : '<div class="hint">Nessun lotto</div>')
+          <button class="qb" data-edit title="Cambia data">📅</button>
+          <button class="qb" data-ld="-1">−</button><button class="qb" data-ld="1">+</button></div>
+          <div class="lot-edit hidden"><input class="in" type="date"><button class="btn" data-ok style="width:auto;margin:0;padding:0 18px">OK</button></div></div>`).join('') : '<div class="hint">Nessun lotto</div>')
         + `<button class="btn sec2" id="la-open">＋ Aggiungi lotto</button>
         <div id="la" class="hidden"><div class="two"><div><label>Scadenza</label><input class="in" type="date" id="la-d"></div>
         <div><label>Quantità</label><input class="in" type="number" inputmode="numeric" min="1" value="1" id="la-q"></div></div>
@@ -762,18 +768,18 @@ function openDetail(id){
     const box = ov.querySelector('#d-lots');
     if (box) {
       box.addEventListener('click', e => {
-        const b = e.target.closest('[data-ld]'), lot = e.target.closest('.lot');
-        if (b && lot) { changeQty(id, +b.dataset.ld, lot.dataset.d); return upd(); }
+        const b = e.target.closest('[data-ld]'), wrap = e.target.closest('.lot-wrap');
+        if (b && wrap) { changeQty(id, +b.dataset.ld, wrap.dataset.d); return upd(); }
+        // cambio data: 📅 apre la riga, OK conferma (niente change: la rotella iOS lo invia a ogni scatto e ridisegnerebbe la lista)
+        if (e.target.closest('[data-edit]') && wrap) return wrap.querySelector('.lot-edit').classList.toggle('hidden');
+        if (e.target.closest('[data-ok]') && wrap) { const v = wrap.querySelector('input').value; if (v) { moveLot(byId(id), wrap.dataset.d, isoOrEmpty(v), +wrap.dataset.q); upd(); } return; }
         if (e.target.closest('#la-open')) return ov.querySelector('#la').classList.toggle('hidden');
         if (e.target.closest('#la-ok')) {
           const q = Math.max(1, parseInt(ov.querySelector('#la-q').value) || 1);
           changeQty(id, q, isoOrEmpty(ov.querySelector('#la-d').value)); upd();
         }
       });
-      box.addEventListener('change', e => {
-        const f = e.target.dataset && e.target.dataset.from;
-        if (f !== undefined) { moveLot(byId(id), f, isoOrEmpty(e.target.value), +e.target.dataset.q); upd(); }
-      });
+
     }
     ov.querySelector('#d-shop').onclick = () => { toggleSpesa(id); shopBtn(); };
     ov.querySelector('#d-m').onclick = () => { changeQty(id, -1); upd(); };
