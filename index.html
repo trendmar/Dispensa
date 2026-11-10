@@ -339,7 +339,7 @@ let tab = 'inv', filter = 'all', query = '';
 let syncing = false, syncErr = '', retryT = 0, scanOpen = false;
 let srv = load(LS.srv, {version: '', config: null});   // ultima versione/config noti del backend
 let lastExp = load(LS.lastExp, {});                     // id prodotto → ultima data scelta (max 200)
-let lp = null, pickerUntil = 0;                         // pannello Scadenza? {id,n,host,sheet}; selettore data nativo aperto fino a…
+let lp = null, us = null, pickerUntil = 0;                         // pannello Scadenza? {id,n,host,sheet}; selettore data nativo aperto fino a…
 const QUICK_DAYS = [7, 30], PICK_MS = 20000, LASTEXP_MAX = 200;
 
 const $ = s => document.querySelector(s);
@@ -512,6 +512,7 @@ function plusOne(id){
   return it;
 }
 function lotPrompt(it){
+  useClose();
   const host = $('#sheet-root').innerHTML ? 'bar' : (scanOpen ? 'panel' : 'bar');
   if (lp && lp.id === it.id && lp.host === host) { lp.n++; $('#lp-n').textContent = '×' + lp.n; return; }   // solo il contatore: riscrivere il pannello distruggerebbe il selettore data aperto
   lotClose(); lp = {id: it.id, n: 1, host, sheet: !!$('#sheet-root').innerHTML};
@@ -540,6 +541,39 @@ function lotClose(){
   if (!lp) return;
   const el = lotHost(); el.innerHTML = ''; el.classList.add('hidden'); lp = null; pickerUntil = 0;
 }
+// Striscia di correzione dopo uno scarico (≥ 2 lotti): lo scarico è già avvenuto dal lotto che scade prima (FEFO);
+// se l'unità veniva da un altro lotto, un solo lotMove la riporta al lotto FEFO e la toglie da quello indicato.
+// Nessun timer: la sostituisce la scansione successiva o la chiude ✕. Il pannello Scadenza? ha la precedenza.
+const useEl = () => $(us.host === 'panel' ? '#lotpanel' : '#lotbar');
+function useClose(){
+  if (!us) return;
+  const el = useEl(); el.innerHTML = ''; el.classList.add('hidden'); us = null;
+}
+function useStrip(it, taken){
+  useClose();
+  if (lp || !taken || !isTracked(it)) return;
+  const alts = effectiveLots(it).filter(l => l.d !== taken.d && l.q > 0);
+  if (!alts.length) return;
+  us = {id: it.id, d: taken.d, host: $('#sheet-root').innerHTML ? 'bar' : (scanOpen ? 'panel' : 'bar')};
+  const el = useEl();
+  el.innerHTML = `<div class="lp-h"><span><b>Tolto dal lotto ${taken.d ? fmtDM(taken.d) : 'senza data'}</b> · ${esc(it.nome)}<br><small>Era un altro lotto?</small></span><button class="lp-x" data-lpx aria-label="Chiudi">✕</button></div><div class="lp-r">`
+    + alts.map(l => `<button class="lp-b" data-use data-d="${l.d}">${l.d ? fmtDM(l.d) : 'Senza data'} · ×${l.q}</button>`).join('') + '</div>';
+  el.classList.remove('hidden');
+}
+function useFix(d){
+  if (!us) return;
+  const it = byId(us.id), from = us.d; useClose();
+  if (!it) return;
+  moveLot(it, d, from, 1);
+  const t = `${it.nome} · tolto dal lotto ${d ? fmtDM(d) : 'senza data'}`;
+  if (scanOpen) scanMsg('− ' + t, 'out'); else toast(t);
+}
+// − di una unità con striscia di correzione (scanner in modalità Usa, tasto − in lista)
+function minusOne(id){
+  const it = changeQty(id, -1);
+  if (it) useStrip(it, changeQty.taken[0]);
+  return it;
+}
 // una sola operazione per scelta: lotMove con q = unità caricate da quando è comparso il pannello
 function lotChoose(d){
   if (!lp) return;
@@ -556,7 +590,8 @@ function lotChoose(d){
   const isDate = e => e.target.classList && e.target.classList.contains('lp-date');
   h.addEventListener('click', e => {
     const c = q => e.target.closest && e.target.closest(q);
-    if (c('[data-lpx]')) return lotClose();
+    if (c('[data-lpx]')) { lotClose(); return useClose(); }
+    if (c('[data-use]')) return useFix(c('[data-use]').dataset.d);
     if (c('[data-lpscegli]')) { if (lp) { lotHost().querySelector('#lp-row').classList.toggle('hidden'); lotPickStart(); } return; }
     if (c('[data-lpok]')) { if (lp && lp.pick) lotChoose(lp.pick); return; }
     const b = c('[data-lp]'); if (b) lotChoose(b.dataset.d);
@@ -972,6 +1007,7 @@ async function closeScanner(){
   try { if (qr && qr.isScanning) await qr.stop(); qr && qr.clear(); } catch(e){}
   qr = null; $('#scan').classList.add('hidden');
   if (lp && lp.host === 'panel') lotClose();
+  if (us && us.host === 'panel') useClose();
   scanOpen = false; render();
 }
 function pauseScan(){ try { qr && qr.isScanning && qr.pause(true); } catch(e){} }
@@ -994,14 +1030,14 @@ async function onCode(code){
   if (read === 'silent') return;
   // conferma visiva prima di qualsiasi await (≤ 50 ms)
   if (read === 'dup') { flash('dup'); beep(false); scanMsg(scanText('dup'), 'dup'); return; }
-  const it = byCode(code);
+  const it = byCode(code); useClose();
 
   if (it && scanMode !== 'ask') {
     const d = scanMode === 'in' ? 1 : -1, kind = d > 0 ? 'in' : 'out', from = it.qty;
     if (d < 0 && from <= 0) { flash('warn'); beep(false); scanMsg(scanText('warn', it.nome), 'warn'); return; }
     flash(kind);
     if (d > 0) { plusOne(it.id); beep(); scanMsg(scanText(kind, it.nome, from, it.qty, isTracked(it) ? ' · scegli la scadenza' : ''), kind); return; }
-    const tr = isTracked(it); changeQty(it.id, d); beep();
+    const tr = isTracked(it); minusOne(it.id); beep();
     let x = '';
     if (tr) {   // R1.10: data del lotto consumato e, se diverso, il prossimo
       const t = changeQty.taken[0], nx = sorted(effectiveLots(it))[0];
@@ -1090,7 +1126,7 @@ function start(){
 document.addEventListener('click', e => {
   const t = e.target;
   const qb = t.closest('.row .qb');
-  if (qb) { const it = +qb.dataset.d > 0 ? plusOne(qb.dataset.id) : changeQty(qb.dataset.id, +qb.dataset.d); if (it && inSpesa(it) && +qb.dataset.d < 0 && it.qty === it.scortaMin - 1) toast(`${it.nome} → lista spesa`); return; }
+  if (qb) { const it = +qb.dataset.d > 0 ? plusOne(qb.dataset.id) : minusOne(qb.dataset.id); if (it && inSpesa(it) && +qb.dataset.d < 0 && it.qty === it.scortaMin - 1) toast(`${it.nome} → lista spesa`); return; }
   const op = t.closest('[data-open]'); if (op) return openDetail(op.dataset.open);
   const th = t.closest('.row .thumb'); if (th) return openDetail(th.parentElement.dataset.id);
   const ch = t.closest('#chips .chip'); if (ch) { filter = ch.dataset.f; render(); window.scrollTo(0,0); return; }

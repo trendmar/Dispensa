@@ -53,9 +53,9 @@ function loadApp({ ls = {}, fetchImpl, now = 1.7e12, online = true } = {}) {
   const ctx = vm.createContext(sandbox);
   const names = ['queue', 'sync', 'onCode', 'decideRead', 'syncLabel', 'cmpVersion', 'scanText', 'fetchJson', 'openSettings', 'openScanner', 'closeScanner',
     'changeQty', 'render', 'VERSION', 'rd', 'flash', 'updateSync', 'noteSrv', 'byCode',
-    'lotsEnabled', 'isTracked', 'expiry', 'expTag', 'lotChoose', 'lotClose', 'setCatScad', 'plusOne', 'moveLot', 'upsert', 'lotPickStart', 'onScan', 'confirmRead', 'openDetail', 'openForm', 'exportCsv'];
+    'lotsEnabled', 'isTracked', 'expiry', 'expTag', 'lotChoose', 'lotClose', 'setCatScad', 'plusOne', 'moveLot', 'upsert', 'lotPickStart', 'useFix', 'useClose', 'minusOne', 'onScan', 'confirmRead', 'openDetail', 'openForm', 'exportCsv'];
   const exp = names.map(n => `${n}: typeof ${n} === 'undefined' ? undefined : ${n}`).join(',');
-  const getters = 'get items(){return items}, set items(v){items=v}, get pending(){return pending}, get syncing(){return syncing}, get syncErr(){return syncErr}, get srv(){return srv}, get cfg(){return cfg}, get scanOpen(){return scanOpen}, get lp(){return lp}, get lastExp(){return lastExp}';
+  const getters = 'get items(){return items}, set items(v){items=v}, get pending(){return pending}, get syncing(){return syncing}, get syncErr(){return syncErr}, get srv(){return srv}, get cfg(){return cfg}, get scanOpen(){return scanOpen}, get lp(){return lp}, get us(){return us}, get lastExp(){return lastExp}';
   const app = vm.runInContext(script + `\n;({${exp}, ${getters}})`, ctx, { filename: 'index.html' });
   const h = {
     app, calls, els, el, clock, navigator, sandbox,

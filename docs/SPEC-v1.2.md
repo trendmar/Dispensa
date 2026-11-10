@@ -154,6 +154,8 @@ Per i prodotti **senza** scadenza attiva ogni operazione si comporta esattamente
 
 **R1.10 (P0): consumo (− Usa).** Nessun tap in più. Messaggio: `− Yogurt greco · 4 → 3 · scade 12/11`, dove la data è quella del lotto consumato; se il prossimo lotto è diverso, accodare ` · poi 20/11`.
 
+**R1.10a (P1, aggiunta dopo la prova su iPhone): striscia di correzione dopo lo scarico.** Lo scarico resta immediato e FEFO. Se il prodotto aveva **almeno due lotti**, compare una striscia non bloccante (nello scanner al posto del pannello, altrove in `#lotbar`): `Tolto dal lotto 12/11 · Era un altro lotto?` con un pulsante per ogni altro lotto (`20/11 · ×3`, `Senza data · ×1`) e ✕. Toccare un lotto invia **un solo `lotMove`** dal lotto indicato al lotto da cui l'app ha tolto l'unità: la quantità totale non cambia e `Movimenti` non riceve voci in più. Nessun timer: la striscia riguarda solo l'ultima unità e la sostituisce la lettura successiva (o ✕); il pannello Scadenza? ha la precedenza. Con gating spento non compare.
+
 **R1.11 (P0): scheda prodotto.** Per i prodotti con scadenza attiva, sezione **Lotti**: una riga per lotto con data, quantità e −/+ propri (`delta` con `lot`); **＋ Aggiungi lotto** (data e quantità: `delta` con `lot`); modifica data di un lotto (📅 apre la riga con il campo data, **OK** conferma con `lotMove` con `q` pari alla quantità del lotto). Il lotto senza data compare come "senza data ×n".
 
 **R1.12 (P0): form Nuovo e Modifica.**

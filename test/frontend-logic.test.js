@@ -349,6 +349,37 @@ t('focusout del campo data (iOS lo invia aprendo il selettore) non riabilita le 
   h.advance(5000); await h.app.onCode('123'); assert.strictEqual(h.app.lp.n, 1); assert.strictEqual(ops(h).length, 1);
 });
 
+/* ---------- Striscia di correzione dopo lo scarico (≥ 2 lotti) ---------- */
+const mkOut = (o = {}) => mkT(Object.assign({ ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'out', 'disp.srv': TR } }, o));
+t('scarico di un prodotto con ≥ 2 lotti: resta immediato (FEFO) e compare la striscia "Tolto dal lotto 12/11 · Era un altro?" con gli altri lotti', async () => {
+  const h = await mkOut(); h.app.openScanner(); await h.app.onCode('123');
+  eq(ops(h).map(o => [o.op, o.delta, 'lot' in o]), [['delta', -1, false]]);
+  const html = h.el('#lotpanel').rec.innerHTML;
+  assert.ok(html.includes('Tolto dal lotto 12/11') && html.includes('data-use') && html.includes('data-d="2026-11-20"') && html.includes('20/11 · ×3') && html.includes('data-lpx'), html);
+  assert.ok(h.app.us && h.app.us.id === 'p1' && h.app.us.d === '2026-11-12'); assert.strictEqual(h.app.lp, null);
+});
+t('correzione: un solo lotMove che riporta una unità al lotto FEFO e la toglie da quello scelto; la quantità non cambia', async () => {
+  const h = await mkOut(); h.app.openScanner(); await h.app.onCode('123');
+  clickT(h, '#lotpanel', { '[data-use]': { dataset: { d: '2026-11-20' } } });
+  eq(ops(h).map(o => [o.op, o.from, o.to, o.q]), [['delta', undefined, undefined, undefined], ['lotMove', '2026-11-20', '2026-11-12', 1]]);
+  eq(lotsOf(p1(h)), [{ d: '2026-11-12', q: 1 }, { d: '2026-11-20', q: 2 }]); assert.strictEqual(p1(h).qty, 3); assert.strictEqual(h.app.us, null);
+  assert.ok(h.el('#lotpanel').classList.contains('hidden'));
+});
+t('nessuna striscia con un solo lotto o con gating spento; ✕ la chiude; la scansione successiva la sostituisce', async () => {
+  const h = await mkOut(); h.app.openScanner(); await h.app.onCode('456');              // Latte: un solo lotto virtuale
+  assert.strictEqual(h.app.us, null); assert.strictEqual(h.el('#lotpanel').rec.innerHTML, '');
+  h.advance(3000); await h.app.onCode('123'); assert.ok(h.app.us);
+  h.advance(3000); await h.app.onCode('456'); assert.strictEqual(h.app.us, null, 'la scansione successiva sostituisce la striscia');
+  const h2 = await mkOut(); h2.app.openScanner(); await h2.app.onCode('123'); assert.ok(h2.app.us); clickT(h2, '#lotpanel', { '[data-lpx]': {} }); assert.strictEqual(h2.app.us, null);
+  const old = await mk({ fetchImpl: async () => ({ json: async () => ({ ok: true, version: '1.1', items: LITEMS(), extras: [] }) }), ls: { 'disp.cfg': CFG, 'disp.items': LITEMS(), 'disp.mode': 'out', 'disp.srv': { version: '1.1', config: null } } });
+  old.app.openScanner(); await old.app.onCode('123'); assert.strictEqual(old.app.us, null);
+});
+t('tasto − in lista: stessa striscia (nel #lotbar); un nuovo carico dello stesso prodotto la chiude', async () => {
+  const h = await mkOut(); h.app.minusOne('p1');
+  assert.ok(h.app.us && h.app.us.host === 'bar' && h.el('#lotbar').rec.innerHTML.includes('Tolto dal lotto 12/11'));
+  h.app.plusOne('p1'); assert.strictEqual(h.app.us, null); assert.ok(h.app.lp);
+});
+
 (async () => {
   let n = 0;
   for (const [name, f] of tests) { await f(); n++; console.log('ok -', name); }
